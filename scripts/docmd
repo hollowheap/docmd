@@ -1,0 +1,937 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "python-docx>=1.2",
+#     "python-pptx>=1.0",
+#     "pymupdf>=1.24",
+#     "rapidocr-onnxruntime>=1.4",
+#     "opencv-python-headless>=4.9",
+#     "msoffcrypto-tool>=5.4",
+# ]
+#
+# [tool.uv]
+# override-dependencies = ["opencv-python; sys_platform == 'never'"]
+# ///
+"""docmd: convert Office documents and PDFs to GitHub Flavored Markdown."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import re
+import sys
+from io import BytesIO
+from pathlib import Path
+from urllib.parse import quote, unquote
+
+VERSION = "0.1.0"
+
+IMAGE_MIME_TYPES = {
+    "png": "image/png",
+    "jpeg": "image/jpeg",
+    "jpg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+    "svg": "image/svg+xml",
+    "bmp": "image/bmp",
+    "tiff": "image/tiff",
+}
+IMAGE_TEXT_PREFIX = "> *[Image Text]*: "
+SUPPORTED_EXTENSIONS = {".docx", ".pptx", ".pdf"}
+TABLE_DELIMITER_CELL_RE = re.compile(r"^:?-{3,}:?$")
+TABLE_ERROR = "table row column count does not match header"
+LINK_RE = re.compile(
+    r"!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^)\s]+))(?:\s+[\"'][^)]*[\"'])?\s*\)"
+)
+
+
+class CorruptDocumentError(Exception):
+    """The input is not a readable document of the declared format."""
+
+
+class EncryptedDocumentError(Exception):
+    """The input is encrypted and no valid password was supplied."""
+
+
+class DocmdArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        self.exit(1, f"{self.prog}: error: {message}\n")
+
+
+def split_table_row(line: str) -> list[str]:
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+
+    cells = []
+    cell = []
+    escaped = False
+    for char in stripped:
+        if escaped:
+            cell.append(char)
+            escaped = False
+        elif char == "\\":
+            cell.append(char)
+            escaped = True
+        elif char == "|":
+            cells.append("".join(cell).strip())
+            cell = []
+        else:
+            cell.append(char)
+    cells.append("".join(cell).strip())
+    return cells
+
+
+def is_table_delimiter(line: str) -> bool:
+    cells = split_table_row(line)
+    return len(cells) > 1 and all(
+        TABLE_DELIMITER_CELL_RE.fullmatch(cell) for cell in cells
+    )
+
+
+def fence_marker(line: str) -> str | None:
+    stripped = line.lstrip()
+    for marker in ("```", "~~~"):
+        if stripped.startswith(marker):
+            return marker
+    return None
+
+
+def verify_markdown(markdown: str, base_dir: Path | None = None) -> list[str]:
+    errors: list[str] = []
+    fence_open: str | None = None
+    lines = markdown.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        marker = fence_marker(line)
+        if marker is not None:
+            if fence_open is None:
+                fence_open = marker
+            elif fence_open == marker:
+                fence_open = None
+            index += 1
+            continue
+        if fence_open is None and index + 1 < len(lines):
+            if "|" in line and is_table_delimiter(lines[index + 1]):
+                header_count = len(split_table_row(line))
+                mismatch = len(split_table_row(lines[index + 1])) != header_count
+                index += 2
+                while (
+                    index < len(lines)
+                    and lines[index].strip()
+                    and "|" in lines[index]
+                ):
+                    if len(split_table_row(lines[index])) != header_count:
+                        mismatch = True
+                    index += 1
+                if mismatch:
+                    errors.append(TABLE_ERROR)
+                continue
+        index += 1
+    if fence_open is not None:
+        errors.append("unbalanced code fence")
+
+    asset_lines = []
+    fence_open = None
+    for line in lines:
+        marker = fence_marker(line)
+        if marker is not None:
+            if fence_open is None:
+                fence_open = marker
+            elif fence_open == marker:
+                fence_open = None
+            continue
+        if fence_open is None:
+            asset_lines.append(line)
+
+    base = Path.cwd() if base_dir is None else Path(base_dir)
+    for match in LINK_RE.finditer("\n".join(asset_lines)):
+        target = (match.group(1) or match.group(2) or "").strip()
+        if not target or target.startswith("#"):
+            continue
+        lowered = target.lower()
+        if lowered.startswith(
+            ("http://", "https://", "mailto:", "data:", "file:", "//")
+        ):
+            continue
+        link = target.split("#", 1)[0].split("?", 1)[0]
+        if not link:
+            continue
+        resolved = (base / unquote(link)).resolve()
+        if not resolved.is_file():
+            errors.append(f"missing asset: {target}")
+        elif resolved.stat().st_size == 0:
+            errors.append(f"zero-byte asset: {target}")
+    return errors
+
+
+def load_ocr_engine():
+    from rapidocr_onnxruntime import RapidOCR
+
+    return RapidOCR()
+
+
+def open_office_source(source: Path, password: str | None, opener):
+    import msoffcrypto
+    from msoffcrypto.exceptions import FileFormatError
+
+    try:
+        with source.open("rb") as handle:
+            try:
+                office = msoffcrypto.OfficeFile(handle)
+            except FileFormatError:
+                office = None
+            if office is not None and office.is_encrypted():
+                if not password:
+                    raise EncryptedDocumentError(f"encrypted document: {source}")
+                try:
+                    office.load_key(password=password)
+                    decrypted = BytesIO()
+                    office.decrypt(decrypted)
+                except Exception as exc:
+                    raise EncryptedDocumentError(f"invalid password: {source}") from exc
+                decrypted.seek(0)
+                return opener(decrypted)
+            handle.seek(0)
+            return opener(handle)
+    except EncryptedDocumentError:
+        raise
+    except Exception as exc:
+        raise CorruptDocumentError(f"corrupt document: {source}") from exc
+
+
+def open_pdf(source: Path, password: str | None = None):
+    import pymupdf
+
+    try:
+        document = pymupdf.open(source)
+    except (pymupdf.EmptyFileError, pymupdf.FileDataError, ValueError) as exc:
+        raise CorruptDocumentError(f"corrupt document: {source}") from exc
+    if document.needs_pass:
+        if not password or not document.authenticate(password):
+            document.close()
+            raise EncryptedDocumentError(f"encrypted document: {source}")
+    return document
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = DocmdArgumentParser(
+        prog="docmd",
+        description="Convert Office documents and PDFs to GitHub Flavored Markdown.",
+    )
+    parser.add_argument("input_path", metavar="INPUT", help="Input document or directory.")
+    parser.add_argument(
+        "-o",
+        "--out",
+        metavar="PATH",
+        default="./out",
+        help="Output file or directory (default: ./out/).",
+    )
+    parser.add_argument("--stdout", action="store_true", help="Write Markdown to stdout.")
+    parser.add_argument("--no-images", action="store_true", help="Omit extracted images.")
+    parser.add_argument("--no-ocr", action="store_true", help="Disable OCR.")
+    parser.add_argument("--password", metavar="SECRET", help="Password for encrypted documents.")
+    parser.add_argument("--verify", action="store_true", help="Verify generated Markdown.")
+    parser.add_argument("-q", "--quiet", action="store_true", help="Suppress progress logs.")
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"%(prog)s {VERSION}",
+        help="Show version information.",
+    )
+    return parser
+
+
+def markdown_table(rows: list[list[str]]) -> list[str]:
+    width = max((len(row) for row in rows), default=0)
+    if width == 0:
+        return []
+
+    normalized = []
+    for row in rows:
+        cells = [
+            cell.replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .replace("\n", "<br>")
+            .replace("\v", "<br>")
+            .replace("|", "\\|")
+            .strip()
+            for cell in row
+        ]
+        normalized.append(cells + [""] * (width - len(cells)))
+
+    header = "| " + " | ".join(normalized[0]) + " |"
+    separator = "| " + " | ".join("---" for _ in range(width)) + " |"
+    return [header, separator, *("| " + " | ".join(row) + " |" for row in normalized[1:])]
+
+
+def pptx_merge_origin(table, row_index: int, column_index: int):
+    for row in range(row_index, -1, -1):
+        for column in range(column_index, -1, -1):
+            candidate = table.cell(row, column)
+            if (
+                candidate.is_merge_origin
+                and row <= row_index < row + candidate.span_height
+                and column <= column_index < column + candidate.span_width
+            ):
+                return candidate
+    return None
+
+
+def pptx_table_rows(table) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for row_index in range(len(table.rows)):
+        row: list[str] = []
+        for column_index in range(len(table.columns)):
+            cell = table.cell(row_index, column_index)
+            text = cell.text
+            if cell.is_spanned:
+                origin = pptx_merge_origin(table, row_index, column_index)
+                if origin is not None:
+                    text = origin.text
+            row.append(text)
+        rows.append(row)
+    return rows
+
+
+def convert_docx(source: Path, include_images: bool, password: str | None = None) -> str:
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    document = open_office_source(source, password, Document)
+    content = list(document.iter_inner_content())
+    paragraphs = [block for block in content if isinstance(block, Paragraph)]
+
+    def style_size(style) -> float | None:
+        while style is not None:
+            if style.font.size is not None:
+                return style.font.size.pt
+            style = style.base_style
+        return None
+
+    def run_size(run, paragraph) -> float | None:
+        if run.font.size is not None:
+            return run.font.size.pt
+        return style_size(paragraph.style)
+
+    def is_bold(paragraph) -> bool:
+        runs = [run for run in paragraph.runs if run.text.strip()]
+        if not runs:
+            return False
+        for run in runs:
+            bold = run.bold
+            if bold is None:
+                style = paragraph.style
+                while style is not None and style.font.bold is None:
+                    style = style.base_style
+                bold = style.font.bold if style is not None else None
+            if not bold:
+                return False
+        return True
+
+    def paragraph_size(paragraph) -> float | None:
+        sizes = []
+        for run in paragraph.runs:
+            if not run.text.strip():
+                continue
+            size = run_size(run, paragraph)
+            if size is not None:
+                sizes.append(size)
+        return max(sizes) if sizes else None
+
+    def is_list(paragraph) -> bool:
+        style = (paragraph.style.name or "").lower()
+        return style.startswith("list bullet") or style.startswith("list number")
+
+    def heading_level(paragraph) -> int | None:
+        style = (paragraph.style.name or "").lower()
+        if not style.startswith("heading "):
+            return None
+        try:
+            return min(max(int(style.split()[-1]), 1), 6)
+        except ValueError:
+            return None
+
+    body_sizes = []
+    for paragraph in paragraphs:
+        if heading_level(paragraph) is not None or is_bold(paragraph):
+            continue
+        size = paragraph_size(paragraph)
+        if size is not None:
+            body_sizes.append(size)
+    if body_sizes:
+        body_size = max(set(body_sizes), key=body_sizes.count)
+    else:
+        body_size = style_size(document.styles["Normal"]) or 11.0
+
+    heading_sizes: dict[float, int] = {}
+    for level in range(1, 7):
+        size = style_size(document.styles[f"Heading {level}"])
+        if size is not None:
+            heading_sizes.setdefault(size, level)
+
+    promoted_sizes = []
+    for paragraph in paragraphs:
+        if heading_level(paragraph) is not None or is_list(paragraph):
+            continue
+        size = paragraph_size(paragraph)
+        if size is not None and size > body_size + 0.5 and is_bold(paragraph):
+            promoted_sizes.append(size)
+
+    promoted_levels: dict[float, int] = {}
+    next_level = 1
+    for size in sorted(set(promoted_sizes), reverse=True):
+        level = heading_sizes.get(size)
+        if level is None:
+            level = min(next_level, 6)
+            next_level += 1
+        promoted_levels[size] = level
+
+    blocks: list[str] = []
+    for block in content:
+        if isinstance(block, Paragraph):
+            text = block.text.strip()
+            if text:
+                level = heading_level(block)
+                if level is None and not is_list(block):
+                    size = paragraph_size(block)
+                    if size is not None and is_bold(block):
+                        level = promoted_levels.get(size)
+                if level is not None:
+                    blocks.append(f"{'#' * level} {text}")
+                elif is_list(block):
+                    style = (block.style.name or "").lower()
+                    marker = "-" if style.startswith("list bullet") else "1."
+                    blocks.append(f"{marker} {text}")
+                else:
+                    blocks.append(text)
+            if include_images:
+                for blip in block._p.xpath(".//a:blip"):
+                    relation_id = blip.get(qn("r:embed"))
+                    if relation_id is None:
+                        continue
+                    image = document.part.related_parts[relation_id]
+                    encoded = base64.b64encode(image.blob).decode("ascii")
+                    blocks.append(f"![](data:{image.content_type};base64,{encoded})")
+        elif isinstance(block, Table):
+            rows = [[cell.text for cell in row.cells] for row in block.rows]
+            table = markdown_table(rows)
+            if table:
+                blocks.append("\n".join(table))
+
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
+def convert_pptx(source: Path, include_images: bool, password: str | None = None) -> str:
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    presentation = open_office_source(source, password, Presentation)
+    slides = list(presentation.slides)
+    blocks: list[str] = []
+
+    for index, slide in enumerate(slides, 1):
+        title_shape = slide.shapes.title
+        title = title_shape.text.strip() if title_shape is not None else ""
+        heading = f"## Slide {index}"
+        if title:
+            heading += f": {title}"
+        blocks.append(heading)
+
+        for shape in slide.shapes:
+            if title_shape is not None and shape.shape_id == title_shape.shape_id:
+                continue
+            if getattr(shape, "has_text_frame", False):
+                text = shape.text_frame.text.strip()
+                if text:
+                    blocks.append(text)
+            if getattr(shape, "has_table", False):
+                table = markdown_table(pptx_table_rows(shape.table))
+                if table:
+                    blocks.append("\n".join(table))
+            if (
+                include_images
+                and getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE
+            ):
+                try:
+                    image = shape.image
+                except (KeyError, ValueError):
+                    continue
+                extension = (image.ext or "").lower()
+                mime_type = image.content_type or IMAGE_MIME_TYPES.get(
+                    extension, f"image/{extension}" if extension else "image/png"
+                )
+                encoded = base64.b64encode(image.blob).decode("ascii")
+                blocks.append(f"![](data:{mime_type};base64,{encoded})")
+
+        if slide.has_notes_slide:
+            notes = slide.notes_slide.notes_text_frame.text.strip()
+            if notes:
+                blocks.append(f"> **Speaker Notes:** {notes}")
+        if index < len(slides):
+            blocks.append("---")
+
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
+def extract_pdf_spans(source: Path, password: str | None = None) -> list[dict[str, object]]:
+    document = open_pdf(source, password)
+    spans: list[dict[str, object]] = []
+    try:
+        for page in document:
+            for block in page.get_text("dict").get("blocks", []):
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        spans.append(
+                            {
+                                "text": span["text"],
+                                "size": span["size"],
+                                "bbox": span["bbox"],
+                                "page": page.number,
+                            }
+                        )
+    finally:
+        document.close()
+    return spans
+
+
+def order_pdf_lines(
+    lines: list[dict[str, object]],
+    page_width: float,
+) -> list[dict[str, object]]:
+    if len(lines) < 2:
+        return lines
+
+    gap = max(24.0, page_width * 0.1)
+    ordered = sorted(lines, key=lambda line: line["bbox"][0])
+    clusters: list[list[dict[str, object]]] = []
+    for line in ordered:
+        x0 = line["bbox"][0]
+        if not clusters or x0 - clusters[-1][-1]["bbox"][0] > gap:
+            clusters.append([line])
+        else:
+            clusters[-1].append(line)
+
+    merged: list[list[dict[str, object]]] = []
+    for cluster in clusters:
+        if merged:
+            previous_x1 = max(line["bbox"][2] for line in merged[-1])
+            cluster_x0 = min(line["bbox"][0] for line in cluster)
+            if cluster_x0 < previous_x1:
+                merged[-1].extend(cluster)
+                continue
+        merged.append(cluster)
+
+    if len(merged) < 2:
+        return sorted(lines, key=lambda line: (line["bbox"][1], line["bbox"][0]))
+
+    ordered_lines: list[dict[str, object]] = []
+    for cluster in sorted(merged, key=lambda group: min(line["bbox"][0] for line in group)):
+        ordered_lines.extend(
+            sorted(cluster, key=lambda line: (line["bbox"][1], line["bbox"][0]))
+        )
+    return ordered_lines
+
+
+def ocr_pdf_page(page, engine) -> list[dict[str, object]]:
+    pixmap = page.get_pixmap(dpi=200)
+    result, _ = engine(pixmap.tobytes("png"))
+    scale_x = page.rect.width / pixmap.width
+    scale_y = page.rect.height / pixmap.height
+
+    lines: list[dict[str, object]] = []
+    for item in result or []:
+        box, text, score = item
+        text = text.strip()
+        if not text or (score is not None and score < 0.5):
+            continue
+        xs = [point[0] for point in box]
+        ys = [point[1] for point in box]
+        bbox = (
+            min(xs) * scale_x,
+            min(ys) * scale_y,
+            max(xs) * scale_x,
+            max(ys) * scale_y,
+        )
+        lines.append(
+            {
+                "text": text,
+                "size": round(bbox[3] - bbox[1], 1),
+                "bbox": bbox,
+                "page": page.number,
+                "page_height": page.rect.height,
+            }
+        )
+    return lines
+
+
+def ocr_image_text(engine, image: bytes) -> str:
+    result, _ = engine(image)
+    items = []
+    for item in result or []:
+        box, text, score = item
+        text = text.strip()
+        if not text or (score is not None and score < 0.5):
+            continue
+        xs = [point[0] for point in box]
+        ys = [point[1] for point in box]
+        items.append((min(ys), min(xs), text))
+    items.sort()
+    return " ".join(text for _, _, text in items)
+
+
+def extract_pdf_lines(
+    source: Path,
+    password: str | None = None,
+    use_ocr: bool = True,
+) -> list[dict[str, object]]:
+    document = open_pdf(source, password)
+    lines: list[dict[str, object]] = []
+    ocr_engine = None
+    try:
+        for page in document:
+            page_lines: list[dict[str, object]] = []
+            for block in page.get_text("dict").get("blocks", []):
+                for line in block.get("lines", []):
+                    spans = line.get("spans", [])
+                    text = "".join(span["text"] for span in spans).strip()
+                    if not text:
+                        continue
+                    dominant = max(spans, key=lambda span: len(span["text"]))
+                    page_lines.append(
+                        {
+                            "text": text,
+                            "size": round(dominant["size"], 1),
+                            "bbox": line["bbox"],
+                            "page": page.number,
+                            "page_height": page.rect.height,
+                        }
+                    )
+            if use_ocr and sum(len(line["text"]) for line in page_lines) < 50:
+                if ocr_engine is None:
+                    ocr_engine = load_ocr_engine()
+                page_lines = ocr_pdf_page(page, ocr_engine) or page_lines
+            lines.extend(order_pdf_lines(page_lines, page.rect.width))
+    finally:
+        document.close()
+    return lines
+
+
+def strip_pdf_margins(lines: list[dict[str, object]]) -> list[dict[str, object]]:
+    margin = 0.1
+    margin_flags: list[bool] = []
+    counts: dict[str, int] = {}
+    for line in lines:
+        height = line["page_height"]
+        bbox = line["bbox"]
+        in_margin = bbox[1] < height * margin or bbox[3] > height * (1 - margin)
+        margin_flags.append(in_margin)
+        if in_margin:
+            key = " ".join(line["text"].split()).casefold()
+            counts[key] = counts.get(key, 0) + 1
+
+    page_number = re.compile(
+        r"(?:page\s+)?[-–—]?\s*\d+\s*[-–—]?(?:\s*(?:/|of)\s*\d+)?",
+        re.IGNORECASE,
+    )
+    kept: list[dict[str, object]] = []
+    for line, in_margin in zip(lines, margin_flags):
+        if not in_margin:
+            kept.append(line)
+            continue
+        text = " ".join(line["text"].split())
+        if counts[text.casefold()] >= 2 or page_number.fullmatch(text):
+            continue
+        kept.append(line)
+    return kept
+
+
+def pdf_image_blocks(
+    source: Path,
+    password: str | None = None,
+    use_ocr: bool = True,
+) -> list[tuple[int, str]]:
+    document = open_pdf(source, password)
+    blocks: list[tuple[int, str]] = []
+    engine = None
+    try:
+        for page in document:
+            seen: set[int] = set()
+            for image_info in page.get_images(full=True):
+                xref = image_info[0]
+                if xref <= 0 or xref in seen:
+                    continue
+                seen.add(xref)
+                try:
+                    extracted = document.extract_image(xref)
+                except Exception:
+                    continue
+                image = extracted.get("image")
+                if not image:
+                    continue
+                extension = (extracted.get("ext") or "").lower()
+                mime_type = IMAGE_MIME_TYPES.get(
+                    extension,
+                    f"image/{extension}" if extension else "image/png",
+                )
+                encoded = base64.b64encode(image).decode("ascii")
+                blocks.append((page.number, f"![](data:{mime_type};base64,{encoded})"))
+                if use_ocr:
+                    if engine is None:
+                        engine = load_ocr_engine()
+                    text = ocr_image_text(engine, image)
+                    if text:
+                        blocks.append((page.number, f"{IMAGE_TEXT_PREFIX}{text}"))
+    finally:
+        document.close()
+    return blocks
+
+
+def convert_pdf(
+    source: Path,
+    include_images: bool,
+    password: str | None = None,
+    use_ocr: bool = True,
+) -> str:
+    lines = strip_pdf_margins(extract_pdf_lines(source, password, use_ocr))
+    image_entries = pdf_image_blocks(source, password, use_ocr) if include_images else []
+    page_text: dict[object, str] = {}
+    for line in lines:
+        page_number = line["page"]
+        page_text[page_number] = f"{page_text.get(page_number, '')} {line['text']}"
+    page_text = {
+        page_number: " ".join(text.split()).casefold()
+        for page_number, text in page_text.items()
+    }
+
+    size_counts: dict[float, int] = {}
+    for line in lines:
+        size = line["size"]
+        size_counts[size] = size_counts.get(size, 0) + 1
+    if not size_counts:
+        return "\n\n".join(block for _, block in image_entries) + (
+            "\n" if image_entries else ""
+        )
+
+    body_size = min(size_counts, key=lambda size: (-size_counts[size], size))
+    heading_sizes = sorted(
+        (size for size in size_counts if size > body_size + 0.5),
+        reverse=True,
+    )
+    heading_levels = {size: min(index, 3) for index, size in enumerate(heading_sizes, 1)}
+
+    images_by_page: dict[int, list[str]] = {}
+    for page_number, block in image_entries:
+        if block.startswith(IMAGE_TEXT_PREFIX):
+            caption = " ".join(block[len(IMAGE_TEXT_PREFIX) :].split()).casefold()
+            if caption and caption in page_text.get(page_number, ""):
+                continue
+        images_by_page.setdefault(page_number, []).append(block)
+
+    text_blocks: dict[int, list[str]] = {}
+    paragraph: list[str] = []
+    current_page: int | None = None
+    for line in lines:
+        if line["page"] != current_page:
+            if paragraph and current_page is not None:
+                text_blocks.setdefault(current_page, []).append(" ".join(paragraph))
+                paragraph = []
+            current_page = line["page"]
+        level = heading_levels.get(line["size"])
+        if level is not None:
+            if paragraph and current_page is not None:
+                text_blocks.setdefault(current_page, []).append(" ".join(paragraph))
+                paragraph = []
+            if current_page is not None:
+                text_blocks.setdefault(current_page, []).append(
+                    f"{'#' * level} {line['text']}"
+                )
+        else:
+            paragraph.append(line["text"])
+    if paragraph and current_page is not None:
+        text_blocks.setdefault(current_page, []).append(" ".join(paragraph))
+
+    blocks: list[str] = []
+    for page in sorted(set(text_blocks) | set(images_by_page)):
+        blocks.extend(text_blocks.get(page, []))
+        blocks.extend(images_by_page.get(page, []))
+
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
+def convert_document(
+    source: Path,
+    include_images: bool,
+    password: str | None = None,
+    use_ocr: bool = True,
+) -> str:
+    suffix = source.suffix.lower()
+    if suffix == ".docx":
+        return convert_docx(source, include_images, password)
+    if suffix == ".pptx":
+        return convert_pptx(source, include_images, password)
+    if suffix == ".pdf":
+        return convert_pdf(source, include_images, password, use_ocr)
+    raise ValueError(f"unsupported input format: {source.suffix}")
+
+
+IMAGE_EXTENSIONS = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/svg+xml": ".svg",
+    "image/bmp": ".bmp",
+    "image/tiff": ".tiff",
+}
+DATA_URI_RE = re.compile(r"!\[([^\]]*)\]\(data:(image/[^;)]+);base64,([A-Za-z0-9+/=]+)\)")
+
+
+def write_markdown(markdown: str, output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if not DATA_URI_RE.search(markdown):
+        output.write_text(markdown, encoding="utf-8")
+        return
+
+    assets = output.parent / f"{output.stem}.assets"
+    assets.mkdir(parents=True, exist_ok=True)
+    counter = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal counter
+        counter += 1
+        content_type = match.group(2)
+        extension = IMAGE_EXTENSIONS.get(content_type, ".bin")
+        name = f"image-{counter:03d}{extension}"
+        (assets / name).write_bytes(base64.b64decode(match.group(3)))
+        href = quote(f"{assets.name}/{name}")
+        return f"![{match.group(1)}]({href})"
+
+    output.write_text(DATA_URI_RE.sub(replace, markdown), encoding="utf-8")
+
+
+def discover_documents(source: Path, exclude: Path | None = None) -> list[Path]:
+    documents = []
+    excluded = exclude.resolve() if exclude is not None else None
+    for path in source.rglob("*"):
+        if not path.is_file():
+            continue
+        if excluded is not None and path.resolve().is_relative_to(excluded):
+            continue
+        relative = path.relative_to(source)
+        if any(part.startswith(".") for part in relative.parts):
+            continue
+        if path.suffix.lower() in SUPPORTED_EXTENSIONS:
+            documents.append(path)
+    return sorted(documents)
+
+
+def convert_source(source: Path, args: argparse.Namespace) -> tuple[str | None, int]:
+    try:
+        markdown = convert_document(
+            source,
+            include_images=not args.no_images,
+            password=args.password,
+            use_ocr=not args.no_ocr,
+        )
+    except EncryptedDocumentError as exc:
+        print(f"docmd: error: {exc}", file=sys.stderr)
+        return None, 3
+    except CorruptDocumentError as exc:
+        print(f"docmd: error: {exc}", file=sys.stderr)
+        return None, 2
+    except ValueError as exc:
+        print(f"docmd: error: {exc}", file=sys.stderr)
+        return None, 1
+    except Exception as exc:
+        print(f"docmd: error: {exc}", file=sys.stderr)
+        return None, 1
+    return markdown, 0
+
+
+def report_verify_errors(markdown: str, base_dir: Path) -> int:
+    errors = verify_markdown(markdown, base_dir)
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        return 1
+    return 0
+
+
+def convert_directory(source: Path, out: Path, args: argparse.Namespace) -> int:
+    if args.stdout:
+        print(
+            "docmd: error: --stdout is not supported for directory input",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(f"docmd: error: cannot create output directory: {exc}", file=sys.stderr)
+        return 1
+
+    source_root = source.resolve()
+    out_root = out.resolve()
+    exclude = (
+        out_root
+        if out_root != source_root and out_root.is_relative_to(source_root)
+        else None
+    )
+
+    for document in discover_documents(source, exclude):
+        markdown, status = convert_source(document, args)
+        if status != 0:
+            return status
+        relative = document.relative_to(source)
+        output = out / relative.parent / f"{relative.stem}.md"
+        write_markdown(markdown or "", output)
+        if not args.quiet:
+            print(f"docmd: wrote {output}", file=sys.stderr)
+        if args.verify and report_verify_errors(output.read_text(encoding="utf-8"), output.parent):
+            return 1
+    return 0
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    source = Path(args.input_path)
+    if not source.exists():
+        print(f"docmd: error: input not found: {source}", file=sys.stderr)
+        return 1
+
+    if source.is_dir():
+        return convert_directory(source, Path(args.out), args)
+
+    markdown, status = convert_source(source, args)
+    if status != 0:
+        return status
+
+    if args.stdout:
+        if args.verify and report_verify_errors(markdown or "", Path.cwd()):
+            return 1
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stdout.write(markdown or "")
+        return 0
+
+    out = Path(args.out)
+    if out.suffix:
+        output = out
+    else:
+        out.mkdir(parents=True, exist_ok=True)
+        output = out / f"{source.stem}.md"
+    write_markdown(markdown or "", output)
+    if args.verify and report_verify_errors(output.read_text(encoding="utf-8"), output.parent):
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
