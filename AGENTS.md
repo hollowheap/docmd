@@ -1,6 +1,6 @@
 # AGENTS.md
 
-`docmd` converts DOCX/PPTX/PDF to GitHub Flavored Markdown. `scripts/docmd` is the source of truth; `dist/` is the packaged skill tree.
+`docmd` converts DOCX/PPTX/PDF to GitHub Flavored Markdown. `scripts/docmd` is the source of truth; `skills/docmd/` is the publishable skill tree.
 
 ## Commands
 
@@ -13,9 +13,16 @@
 
 ## Packaging
 
-- Edit `scripts/docmd`, not `dist/`. `dist/` is distribution output: `SKILL.md`, scripts README, reference guides, and fixtures.
+- Edit `scripts/docmd`, not `skills/docmd/`. `skills/docmd/` is the publishable tree: `SKILL.md`, `README.md`, scripts README, reference guides, and fixtures.
+- `scripts/dist.py` syncs `scripts/docmd` into `skills/docmd/scripts/docmd` (mode `0755`), validates the SKILL.md frontmatter and PEP 723 metadata, and smoke-converts every fixture. Run it after any change to `scripts/docmd`.
 - `scripts/docmd` is a PEP 723 script. Keep its `dependencies` in sync with `pyproject.toml`; run `uv lock` after dependency changes.
 - Keep `opencv-python-headless` and the `opencv-python` override in both manifests. RapidOCR imports fail without this pairing.
+
+## Distribution
+
+- skills.sh indexes public GitHub repos; there is no upload step. Publish by pushing this repository and installing with `npx skills add <owner>/<repo> --skill docmd`.
+- The skill directory name must match the SKILL.md `name` field (`docmd`), and `SKILL.md` must stay at `skills/docmd/SKILL.md`.
+- `SKILL.md` frontmatter must keep `name`, `description`, `license`, `compatibility`, and `metadata.version`; `scripts/dist.py` fails the build when any is missing.
 
 ## Conversion seams
 
@@ -29,7 +36,7 @@
 
 - Tests use subprocess CLI calls; `tests/test_verify.py` also imports `scripts/docmd` as a module.
 - OCR tests are offline but slow; use `--no-ocr` for tests that do not exercise OCR.
-- `dist/reference/fixtures/sample.{docx,pptx,pdf}` share the stem `sample`; convert them into separate output roots or `sample.md` is overwritten.
+- `skills/docmd/references/fixtures/sample.{docx,pptx,pdf}` share the stem `sample`; convert them into separate output roots or `sample.md` is overwritten.
 
 ## References
 

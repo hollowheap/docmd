@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the packaged docmd skill tree and smoke-test its conversions."""
+"""Sync the publishable docmd skill tree and smoke-test its conversions."""
 
 from __future__ import annotations
 
@@ -11,16 +11,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "scripts" / "docmd"
-DIST = ROOT / "dist"
-PACKAGED = DIST / "scripts" / "docmd"
-FIXTURES = DIST / "reference" / "fixtures"
+SKILL_ROOT = ROOT / "skills" / "docmd"
+PACKAGED = SKILL_ROOT / "scripts" / "docmd"
+FIXTURES = SKILL_ROOT / "references" / "fixtures"
 FIXTURE_NAMES = ("sample.docx", "sample.pptx", "sample.pdf")
 STATIC_FILES = (
-    DIST / "SKILL.md",
-    DIST / "scripts" / "README.md",
-    DIST / "reference" / "docx.md",
-    DIST / "reference" / "pptx.md",
-    DIST / "reference" / "pdf.md",
+    SKILL_ROOT / "SKILL.md",
+    SKILL_ROOT / "README.md",
+    SKILL_ROOT / "scripts" / "README.md",
+    SKILL_ROOT / "references" / "docx.md",
+    SKILL_ROOT / "references" / "pptx.md",
+    SKILL_ROOT / "references" / "pdf.md",
     *(FIXTURES / name for name in FIXTURE_NAMES),
 )
 PEP723_SHEBANG = "#!/usr/bin/env -S uv run --script"
@@ -30,17 +31,47 @@ PEP723_MARKERS = (
     "dependencies = [",
     "# ///",
 )
+REQUIRED_FRONTMATTER = ("name", "description", "license", "compatibility")
+
+
+def frontmatter_fields(text: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    if not text.startswith("---\n"):
+        return fields
+    block = text.split("\n---", 1)[0].removeprefix("---\n")
+    parent = ""
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        key, _, value = line.partition(":")
+        if line[:1].isspace():
+            if parent:
+                fields[f"{parent}.{key.strip()}"] = value.strip().strip('"')
+            continue
+        parent = key.strip()
+        fields[parent] = value.strip()
+    return fields
 
 
 def build() -> None:
     missing = [str(path.relative_to(ROOT)) for path in STATIC_FILES if not path.is_file()]
     if missing:
-        raise SystemExit(f"Missing distribution sources: {', '.join(missing)}")
+        raise SystemExit(f"Missing skill sources: {', '.join(missing)}")
 
     source = SOURCE.read_text(encoding="utf-8")
     missing_metadata = [marker for marker in PEP723_MARKERS if marker not in source]
     if not source.startswith(PEP723_SHEBANG) or missing_metadata:
         raise SystemExit(f"{SOURCE.relative_to(ROOT)} is missing PEP 723 metadata")
+
+    fields = frontmatter_fields((SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8"))
+    missing_fields = [key for key in REQUIRED_FRONTMATTER if not fields.get(key)]
+    if missing_fields:
+        raise SystemExit(f"SKILL.md is missing frontmatter: {', '.join(missing_fields)}")
+    if fields["name"] != SKILL_ROOT.name:
+        raise SystemExit(
+            f"SKILL.md name {fields['name']!r} does not match {SKILL_ROOT.name!r}"
+        )
 
     PACKAGED.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(SOURCE, PACKAGED)

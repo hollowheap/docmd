@@ -12,9 +12,11 @@
 - [x] D10: Apply format-specific layout rules for PPTX slide headings and notes, DOCX heading styles and font promotion, PDF font-cluster headings, multi-column order, running header/footer suppression, and GFM tables | Why: preserve document hierarchy and reading order
 - [x] D11: Directory input recurses through non-hidden `.docx`, `.pptx`, and `.pdf` files and mirrors the input hierarchy in the output tree | Why: predictable batch conversion
 - [x] D12: `--verify` checks GFM table column alignment, balanced code fences, and resolvable non-empty asset links | Why: catch broken Markdown before downstream use
-- [x] D13: `dist/` contains `SKILL.md`, `scripts/docmd`, `scripts/README.md`, reference guides, and fixtures | Why: md-questioner-compatible skill distribution
+- [x] D13: `skills/docmd/` contains `SKILL.md`, `scripts/docmd`, `scripts/README.md`, reference guides, and fixtures | Why: md-questioner-compatible skill distribution
 - [x] D14: `scripts/dist.py` builds the distribution and runs smoke conversions on sample fixtures | Why: verify the packaged artifact before distribution
 
 ## Non-Goals
 
 - None recorded.
+- [x] D15: Publish the skill from this repository as a monorepo skill at `skills/docmd/`, installed with `npx skills add <owner>/<repo> --skill docmd`; `scripts/docmd` stays the source of truth and `scripts/dist.py` syncs it into the published tree | Why: skills.sh indexes public GitHub repos with no upload step, and one authored tree avoids drift between copies
+- [x] D16: Ship the skill under MIT with `SKILL.md` frontmatter carrying `name`, `description`, `license`, `compatibility`, and `metadata.version`, and link the three reference guides from `SKILL.md` | Why: agents may reproduce the skill verbatim, and linked guides are what make progressive disclosure work

@@ -13,7 +13,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "dist.py"
-IGNORED = ("dist/", ".venv/", ".pytest_cache/", ".git/")
+SKILL_ROOT = ROOT / "skills" / "docmd"
+IGNORED = (".venv/", ".pytest_cache/", ".git/")
 
 
 def load_builder() -> ModuleType:
@@ -48,7 +49,7 @@ def run_builder() -> subprocess.CompletedProcess[str]:
 
 
 def test_clean_rebuild() -> None:
-    packaged = ROOT / "dist" / "scripts" / "docmd"
+    packaged = SKILL_ROOT / "scripts" / "docmd"
     packaged.unlink(missing_ok=True)
 
     result = run_builder()
@@ -56,7 +57,9 @@ def test_clean_rebuild() -> None:
     assert result.returncode == 0, result.stderr
     assert packaged.is_file()
     assert os.access(packaged, os.X_OK)
-    assert packaged.read_text() == (ROOT / "scripts" / "docmd").read_text()
+    assert packaged.read_text(encoding="utf-8") == (
+        ROOT / "scripts" / "docmd"
+    ).read_text(encoding="utf-8")
 
 
 def test_missing_source(tmp_path: Path, monkeypatch) -> None:
@@ -66,7 +69,7 @@ def test_missing_source(tmp_path: Path, monkeypatch) -> None:
         "#!/usr/bin/env -S uv run --script\n# /// script\n# ///\n",
         encoding="utf-8",
     )
-    packaged = tmp_path / "dist" / "scripts" / "docmd"
+    packaged = tmp_path / "skills" / "docmd" / "scripts" / "docmd"
     packaged.parent.mkdir(parents=True)
     packaged.write_text("original", encoding="utf-8")
 
@@ -77,7 +80,7 @@ def test_missing_source(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(builder, "STATIC_FILES", (tmp_path / "missing.md",))
     with pytest.raises(SystemExit) as missing:
         builder.build()
-    assert "Missing distribution sources" in str(missing.value)
+    assert "Missing skill sources" in str(missing.value)
     assert packaged.read_text(encoding="utf-8") == "original"
 
     monkeypatch.setattr(builder, "STATIC_FILES", (source,))
@@ -93,17 +96,17 @@ def test_idempotent() -> None:
     first = run_builder()
     assert first.returncode == 0, first.stderr
     after_first = snapshot(ROOT)
-    dist_first = snapshot(ROOT / "dist")
+    skill_first = snapshot(SKILL_ROOT)
 
     second = run_builder()
     assert second.returncode == 0, second.stderr
     after_second = snapshot(ROOT)
-    dist_second = snapshot(ROOT / "dist")
+    skill_second = snapshot(SKILL_ROOT)
 
     assert after_first == after_second
-    assert dist_first == dist_second
+    assert skill_first == skill_second
     assert before == after_second
 
-    packaged = ROOT / "dist" / "scripts" / "docmd"
+    packaged = SKILL_ROOT / "scripts" / "docmd"
     assert packaged.read_bytes() == (ROOT / "scripts" / "docmd").read_bytes()
     assert packaged.stat().st_mode & 0o777 == 0o755

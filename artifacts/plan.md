@@ -25,11 +25,11 @@
 - [x] T23 [S15] (blocked-by: T13): `--verify` fails when a GFM table row column count differs from the header. | Verify: `uv run pytest tests/test_verify.py::test_table_alignment -q`
 - [x] T24 [S15] (blocked-by: T02): `--verify` fails when code fences are unbalanced. | Verify: `uv run pytest tests/test_verify.py::test_code_fences -q`
 - [x] T25 [S15] (blocked-by: T14): `--verify` fails when a local asset link is missing or points to a zero-byte file. | Verify: `uv run pytest tests/test_verify.py::test_asset_links -q`
-- [x] T26 [S16] (blocked-by: T01): `dist/SKILL.md` has valid `name` and `description` frontmatter, and `dist/scripts/README.md` exists. | Verify: `uv run pytest tests/test_dist_layout.py::test_skill_and_readme -q`
-- [x] T27 [S16] (blocked-by: T26): `dist/reference/` includes DOCX, PPTX, and PDF guides plus sample fixtures. | Verify: `uv run pytest tests/test_dist_layout.py::test_reference_assets -q`
-- [x] T28 [S16] (blocked-by: T27): `dist/scripts/docmd` is emitted executable with PEP 723 metadata. | Verify: `uv run pytest tests/test_dist_layout.py::test_executable_script -q`
-- [x] T29 [S17] (blocked-by: T28): `scripts/dist.py` rebuilds `dist/` from source in a clean tree. | Verify: `uv run pytest tests/test_dist_builder.py::test_clean_rebuild -q`
-- [x] T30 [S01] (blocked-by: T28): Packaged `dist/scripts/docmd` runs under uv and prints its version. | Verify: `uv run --script dist/scripts/docmd --version`
+- [x] T26 [S16] (blocked-by: T01): `skills/docmd/SKILL.md` has valid `name` and `description` frontmatter, and `skills/docmd/scripts/README.md` exists. | Verify: `uv run pytest tests/test_skill_layout.py::test_skill_and_readme -q`
+- [x] T27 [S16] (blocked-by: T26): `skills/docmd/reference/` includes DOCX, PPTX, and PDF guides plus sample fixtures. | Verify: `uv run pytest tests/test_skill_layout.py::test_reference_assets -q`
+- [x] T28 [S16] (blocked-by: T27): `skills/docmd/scripts/docmd` is emitted executable with PEP 723 metadata. | Verify: `uv run pytest tests/test_skill_layout.py::test_executable_script -q`
+- [x] T29 [S17] (blocked-by: T28): `scripts/dist.py` rebuilds `skills/docmd/` from source in a clean tree. | Verify: `uv run pytest tests/test_skill_builder.py::test_clean_rebuild -q`
+- [x] T30 [S01] (blocked-by: T28): Packaged `skills/docmd/scripts/docmd` runs under uv and prints its version. | Verify: `uv run --script skills/docmd/scripts/docmd --version`
 - [x] T31 [S17] (blocked-by: T29, T05, T07, T09, T14): Builder smoke-converts each sample fixture via the packaged script, asserting exit 0, non-empty Markdown, and expected asset creation. | Verify: `uv run python scripts/dist.py`
 
 - [x] T32 [S18] (blocked-by: none): PEP 723 dependencies, `pyproject.toml`, and `uv.lock` stay aligned, including the opencv override pairing. | Verify: `uv run pytest tests/test_packaging.py::test_dependency_parity -q`
@@ -55,6 +55,11 @@
 - [x] T52 [S38] (blocked-by: none): `--verify` ignores remote/anchor/data/file/protocol-relative links and normalizes local paths before checks. | Verify: `uv run pytest tests/test_verify.py::test_link_targets -q`
 - [x] T53 [S39] (blocked-by: none): `--verify` recognizes `~~~` fences and reports unbalanced tilde fences. | Verify: `uv run pytest tests/test_verify.py::test_tilde_fences -q`
 - [x] T54 [S40] (blocked-by: none): Directory `--verify` checks each output against its parent and stops at the first failure. | Verify: `uv run pytest tests/test_batch.py::test_verify_directory -q`
-- [x] T55 [S41] (blocked-by: none): Fixtures open natively with non-empty bodies and contain media. | Verify: `uv run pytest tests/test_dist_layout.py::test_fixture_validity -q`
-- [x] T56 [S42] (blocked-by: T29): Builder rejects missing static files or PEP 723 markers without touching an existing packaged script. | Verify: `uv run pytest tests/test_dist_builder.py::test_missing_source -q`
-- [x] T57 [S43] (blocked-by: T29): Repeated builds are byte-identical with mode 755 and do not mutate outside `dist/` or temp dirs. | Verify: `uv run pytest tests/test_dist_builder.py::test_idempotent -q`
+- [x] T55 [S41] (blocked-by: none): Fixtures open natively with non-empty bodies and contain media. | Verify: `uv run pytest tests/test_skill_layout.py::test_fixture_validity -q`
+- [x] T56 [S42] (blocked-by: T29): Builder rejects missing static files or PEP 723 markers without touching an existing packaged script. | Verify: `uv run pytest tests/test_skill_builder.py::test_missing_source -q`
+- [x] T57 [S43] (blocked-by: T29): Repeated builds are byte-identical with mode 755 and do not mutate outside `skills/docmd/` or temp dirs. | Verify: `uv run pytest tests/test_skill_builder.py::test_idempotent -q`
+- [x] T58 [S44] (blocked-by: none): `skills/docmd/` carries the publishable tree with an executable, byte-identical `scripts/docmd`, the three reference guides, and the three fixtures. | Verify: `uv run pytest tests/test_skill_layout.py -q`
+- [x] T59 [S45] (blocked-by: T58): `scripts/dist.py` syncs the packaged script and rejects missing static files, PEP 723 markers, or frontmatter fields. | Verify: `uv run pytest tests/test_skill_builder.py -q`
+- [x] T60 [S46] (blocked-by: T59): The builder smoke-converts each fixture in the published tree. | Verify: `uv run python scripts/dist.py`
+- [x] T61 [S47] (blocked-by: T58): SKILL.md frontmatter carries name, description, license, compatibility, and version, and the body links the reference guides. | Verify: `uv run pytest tests/test_skill_layout.py::test_frontmatter_contract -q`
+- [x] T62 [S48] (blocked-by: T58): The repository ships an MIT LICENSE and a skill README with install, usage, and exit codes. | Verify: `uv run pytest tests/test_skill_layout.py::test_skill_and_readme -q`

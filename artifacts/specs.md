@@ -1,6 +1,6 @@
 # Specs
 
-- [x] S01 [D01]: `dist/scripts/docmd` is a single-file PEP 723 executable; `uv run --script dist/scripts/docmd --version` prints a version and exits 0 without a pre-created virtualenv. | Verify: `uv run --script dist/scripts/docmd --version`
+- [x] S01 [D01]: `skills/docmd/scripts/docmd` is a single-file PEP 723 executable; `uv run --script skills/docmd/scripts/docmd --version` prints a version and exits 0 without a pre-created virtualenv. | Verify: `uv run --script skills/docmd/scripts/docmd --version`
 - [x] S02 [D02]: `docmd sample.docx --stdout` emits ordered Markdown for paragraphs, heading styles, lists, inline images, and native tables, parsed with `python-docx`. | Verify: `uv run pytest tests/test_docx.py::test_block_extraction -q`
 - [x] S03 [D03]: `docmd sample.pptx --stdout` emits every slide in order with shape text, tables, and speaker notes, parsed with `python-pptx`. | Verify: `uv run pytest tests/test_pptx.py::test_slide_extraction -q`
 - [x] S04 [D04]: `docmd sample.pdf --stdout` preserves page text and uses PyMuPDF span font size and bounding boxes for layout inference. | Verify: `uv run pytest tests/test_pdf.py::test_span_extraction -q`
@@ -15,8 +15,8 @@
 - [x] S13 [D10]: Tables use strict GFM pipe syntax; merged cells flatten to regular rows and columns; internal cell newlines become `<br>`. | Verify: `uv run pytest tests/test_tables.py -q`
 - [x] S14 [D11]: Directory input discovers non-hidden `.docx`, `.pptx`, and `.pdf` files recursively, mirrors subfolders under the output root, and co-locates each asset directory with its Markdown file. | Verify: `uv run pytest tests/test_batch.py -q`
 - [x] S15 [D12]: `--verify` fails when a GFM table row column count differs from the header, a code fence is unbalanced, or a referenced local asset is missing or zero bytes. | Verify: `uv run pytest tests/test_verify.py -q`
-- [x] S16 [D13]: `dist/` exposes `SKILL.md` with valid `name` and `description` frontmatter, executable `scripts/docmd`, `scripts/README.md`, format guides, and fixtures. | Verify: `uv run pytest tests/test_dist_layout.py -q`
-- [x] S17 [D14]: `scripts/dist.py` rebuilds `dist/` and converts each sample fixture through `dist/scripts/docmd`, asserting exit 0, non-empty Markdown, and expected asset creation. | Verify: `uv run python scripts/dist.py`
+- [x] S16 [D13]: `skills/docmd/` exposes `SKILL.md` with valid `name` and `description` frontmatter, executable `scripts/docmd`, `scripts/README.md`, format guides, and fixtures. | Verify: `uv run pytest tests/test_skill_layout.py -q`
+- [x] S17 [D14]: `scripts/dist.py` rebuilds `skills/docmd/` and converts each sample fixture through `skills/docmd/scripts/docmd`, asserting exit 0, non-empty Markdown, and expected asset creation. | Verify: `uv run python scripts/dist.py`
 
 - [x] S18 [D01]: PEP 723 `dependencies` in `scripts/docmd`, `pyproject.toml`, and `uv.lock` agree, including the `opencv-python` override pairing. | Verify: `uv run pytest tests/test_packaging.py::test_dependency_parity -q`
 - [x] S19 [D02]: DOCX `List Number` paragraphs emit `1. ` markers in document order; `List Bullet` paragraphs emit `- `. | Verify: `uv run pytest tests/test_docx.py::test_numbered_list_markers -q`
@@ -41,6 +41,11 @@
 - [x] S38 [D12]: `--verify` ignores anchor, `http(s)`, `mailto`, `data`, `file`, and protocol-relative links; URL-decodes local paths and strips query/fragment before checks. | Verify: `uv run pytest tests/test_verify.py::test_link_targets -q`
 - [x] S39 [D12]: `--verify` treats `~~~` fences as code fences and reports unbalanced tilde fences. | Verify: `uv run pytest tests/test_verify.py::test_tilde_fences -q`
 - [x] S40 [D12]: Directory `--verify` checks each output against its own parent directory and stops with exit 1 on the first failure. | Verify: `uv run pytest tests/test_batch.py::test_verify_directory -q`
-- [x] S41 [D13]: Every `dist/reference/fixtures/sample.*` opens with its native parser, has a non-empty body, and contains media. | Verify: `uv run pytest tests/test_dist_layout.py::test_fixture_validity -q`
-- [x] S42 [D14]: `scripts/dist.py` rejects missing static files or PEP 723 markers, exits nonzero, and leaves an existing packaged script untouched. | Verify: `uv run pytest tests/test_dist_builder.py::test_missing_source -q`
-- [x] S43 [D14]: Repeated builder runs are byte-identical with mode `0o755` and mutate nothing outside `dist/` or temporary directories. | Verify: `uv run pytest tests/test_dist_builder.py::test_idempotent -q`
+- [x] S41 [D13]: Every `skills/docmd/reference/fixtures/sample.*` opens with its native parser, has a non-empty body, and contains media. | Verify: `uv run pytest tests/test_skill_layout.py::test_fixture_validity -q`
+- [x] S42 [D14]: `scripts/dist.py` rejects missing static files or PEP 723 markers, exits nonzero, and leaves an existing packaged script untouched. | Verify: `uv run pytest tests/test_skill_builder.py::test_missing_source -q`
+- [x] S43 [D14]: Repeated builder runs are byte-identical with mode `0o755` and mutate nothing outside `skills/docmd/` or temporary directories. | Verify: `uv run pytest tests/test_skill_builder.py::test_idempotent -q`
+- [x] S44 [D15]: `skills/docmd/` holds the publishable tree: `SKILL.md` at the directory root, an executable `scripts/docmd` byte-identical to `scripts/docmd`, `README.md`, `scripts/README.md`, `references/{docx,pptx,pdf}.md`, and `references/fixtures/sample.{docx,pptx,pdf}`. | Verify: `uv run pytest tests/test_skill_layout.py -q`
+- [x] S45 [D15]: `scripts/dist.py` syncs `scripts/docmd` into `skills/docmd/scripts/docmd` with mode `0o755` and fails with a nonzero exit when a static file, the PEP 723 metadata, or a SKILL.md frontmatter field is missing. | Verify: `uv run pytest tests/test_skill_builder.py -q`
+- [x] S46 [D15]: `scripts/dist.py` smoke-converts every `skills/docmd/references/fixtures/sample.*` through the packaged script, asserting exit 0, non-empty Markdown, and extracted assets. | Verify: `uv run python scripts/dist.py`
+- [x] S47 [D16]: `skills/docmd/SKILL.md` frontmatter declares `name: docmd` matching the directory, a non-empty description, `license: MIT`, a `compatibility` line naming `uv`, and `metadata.version`; the body links `references/docx.md`, `references/pptx.md`, and `references/pdf.md`. | Verify: `uv run pytest tests/test_skill_layout.py::test_frontmatter_contract -q`
+- [x] S48 [D16]: The repository ships an MIT `LICENSE` file and `skills/docmd/README.md` describing install, usage, and exit codes. | Verify: `uv run pytest tests/test_skill_layout.py::test_skill_and_readme -q`
