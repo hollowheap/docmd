@@ -68,6 +68,18 @@ def test_output_classification(tmp_path: Path) -> None:
     assert (directory_output / "sample.md").is_file()
 
 
+def test_ascii_typography(tmp_path: Path) -> None:
+    document = Document()
+    document.add_paragraph("\u201cquoted\u201d \u2013 dash\u2026\u00a0caf\u00e9 \u4e2d\u6587")
+    source = tmp_path / "typography.docx"
+    document.save(source)
+
+    result = run_docmd(str(source), "--stdout")
+
+    assert result.returncode == 0, result.stderr
+    assert '"quoted" - dash... caf\u00e9 \u4e2d\u6587' in result.stdout
+
+
 def test_quiet_progress(tmp_path: Path) -> None:
     document = Document()
     document.add_paragraph("Body text")

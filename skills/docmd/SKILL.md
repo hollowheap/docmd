@@ -36,6 +36,7 @@ uv run --script scripts/docmd <input-path> [-o <out-path>] [--stdout]
 
 - `--stdout` writes Markdown to standard output and inlines images as data URIs.
 - File mode writes `<name>.md` next to a sibling `<name>.assets/` directory.
+- Output normalizes smart quotes, dashes, ellipses, and invisible spaces to ASCII.
 - `--verify` checks GFM table columns, code fences, and local asset links.
 - Exit codes: `0` success, `1` CLI or runtime failure, `2` corrupt document,
   `3` encrypted document without a valid password.

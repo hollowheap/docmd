@@ -7,6 +7,7 @@ Convert DOCX, PPTX, and PDF documents into GitHub Flavored Markdown.
 - One single-file PEP 723 script (`scripts/docmd`) that runs under `uv`.
 - Headings, lists, GFM tables, speaker notes, and extracted images.
 - Offline OCR for scanned pages and text inside embedded images.
+- ASCII-normalized typography: smart quotes, dashes, ellipses, and invisible spaces.
 - `--verify` to catch broken tables, code fences, and asset links before use.
 
 ## Install

@@ -44,6 +44,51 @@ TABLE_ERROR = "table row column count does not match header"
 LINK_RE = re.compile(
     r"!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^)\s]+))(?:\s+[\"'][^)]*[\"'])?\s*\)"
 )
+ASCII_TRANSLATION = str.maketrans(
+    {
+        0x00A0: " ",
+        0x00B7: "-",
+        0x00D7: "x",
+        0x2007: " ",
+        0x200B: "",
+        0x200C: "",
+        0x200D: "",
+        0x2010: "-",
+        0x2011: "-",
+        0x2012: "-",
+        0x2013: "-",
+        0x2014: "-",
+        0x2015: "-",
+        0x2018: "'",
+        0x2019: "'",
+        0x201A: "'",
+        0x201B: "'",
+        0x201C: '"',
+        0x201D: '"',
+        0x201E: '"',
+        0x201F: '"',
+        0x2022: "-",
+        0x2023: "-",
+        0x2026: "...",
+        0x202F: " ",
+        0x2043: "-",
+        0x205F: " ",
+        0x2060: "",
+        0x2190: "<-",
+        0x2192: "->",
+        0x2194: "<->",
+        0x21D2: "=>",
+        0x2212: "-",
+        0x2260: "!=",
+        0x2264: "<=",
+        0x2265: ">=",
+        0x25AA: "-",
+        0x25AB: "-",
+        0x25E6: "-",
+        0x3000: " ",
+        0xFEFF: "",
+    }
+)
 
 
 class CorruptDocumentError(Exception):
@@ -795,6 +840,10 @@ IMAGE_EXTENSIONS = {
 DATA_URI_RE = re.compile(r"!\[([^\]]*)\]\(data:(image/[^;)]+);base64,([A-Za-z0-9+/=]+)\)")
 
 
+def sanitize_ascii(markdown: str) -> str:
+    return markdown.translate(ASCII_TRANSLATION)
+
+
 def write_markdown(markdown: str, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     if not DATA_URI_RE.search(markdown):
@@ -854,7 +903,7 @@ def convert_source(source: Path, args: argparse.Namespace) -> tuple[str | None, 
     except Exception as exc:
         print(f"docmd: error: {exc}", file=sys.stderr)
         return None, 1
-    return markdown, 0
+    return sanitize_ascii(markdown), 0
 
 
 def report_verify_errors(markdown: str, base_dir: Path) -> int:
