@@ -27,6 +27,7 @@ uv run --script scripts/docmd ./documents -o ./out
 - `--stdout` prints Markdown and inlines images as Base64 data URIs.
 - File mode writes `<name>.md` plus a sibling `<name>.assets/` directory.
 - `--no-ocr` skips OCR, `--no-images` skips image extraction.
+- `--jobs N` converts up to N directory documents concurrently (default: 2).
 - Exit codes: `0` success, `1` CLI or runtime failure, `2` corrupt document,
   `3` encrypted document without a valid password.
 

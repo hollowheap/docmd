@@ -20,7 +20,9 @@ from __future__ import annotations
 import argparse
 import base64
 import re
+import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote, unquote
@@ -282,6 +284,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-ocr", action="store_true", help="Disable OCR.")
     parser.add_argument("--password", metavar="SECRET", help="Password for encrypted documents.")
     parser.add_argument("--verify", action="store_true", help="Verify generated Markdown.")
+    parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=2,
+        metavar="N",
+        help="Maximum concurrent documents for directory input (default: 2).",
+    )
     parser.add_argument("-q", "--quiet", action="store_true", help="Suppress progress logs.")
     parser.add_argument(
         "-v",
@@ -914,6 +924,31 @@ def report_verify_errors(markdown: str, base_dir: Path) -> int:
     return 0
 
 
+def document_output_path(out: Path, source: Path, document: Path) -> Path:
+    relative = document.relative_to(source)
+    return out / relative.parent / f"{relative.stem}.md"
+
+
+def document_command(document: Path, output: Path, args: argparse.Namespace) -> list[str]:
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        str(document),
+        "-o",
+        str(output),
+        "-q",
+    ]
+    if args.no_images:
+        command.append("--no-images")
+    if args.no_ocr:
+        command.append("--no-ocr")
+    if args.password:
+        command.extend(["--password", args.password])
+    if args.verify:
+        command.append("--verify")
+    return command
+
+
 def convert_directory(source: Path, out: Path, args: argparse.Namespace) -> int:
     if args.stdout:
         print(
@@ -934,23 +969,48 @@ def convert_directory(source: Path, out: Path, args: argparse.Namespace) -> int:
         if out_root != source_root and out_root.is_relative_to(source_root)
         else None
     )
+    documents = discover_documents(source, exclude)
 
-    for document in discover_documents(source, exclude):
-        markdown, status = convert_source(document, args)
-        if status != 0:
-            return status
-        relative = document.relative_to(source)
-        output = out / relative.parent / f"{relative.stem}.md"
-        write_markdown(markdown or "", output)
-        if not args.quiet:
-            print(f"docmd: wrote {output}", file=sys.stderr)
-        if args.verify and report_verify_errors(output.read_text(encoding="utf-8"), output.parent):
-            return 1
+    if args.jobs == 1:
+        for document in documents:
+            markdown, status = convert_source(document, args)
+            if status != 0:
+                return status
+            output = document_output_path(out, source, document)
+            write_markdown(markdown or "", output)
+            if not args.quiet:
+                print(f"docmd: wrote {output}", file=sys.stderr)
+            if args.verify and report_verify_errors(
+                output.read_text(encoding="utf-8"), output.parent
+            ):
+                return 1
+        return 0
+
+    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        futures = {}
+        for document in documents:
+            output = document_output_path(out, source, document)
+            futures[pool.submit(
+                subprocess.run, document_command(document, output, args)
+            )] = output
+
+        for future in as_completed(futures):
+            output = futures[future]
+            result = future.result()
+            if result.returncode != 0:
+                for pending in futures:
+                    pending.cancel()
+                return result.returncode
+            if not args.quiet:
+                print(f"docmd: wrote {output}", file=sys.stderr)
     return 0
 
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.jobs < 1:
+        print("docmd: error: --jobs must be at least 1", file=sys.stderr)
+        return 1
     source = Path(args.input_path)
     if not source.exists():
         print(f"docmd: error: input not found: {source}", file=sys.stderr)

@@ -126,6 +126,49 @@ def test_partial_failure(tmp_path: Path) -> None:
     assert not (out / "b.md").exists()
 
 
+def test_parallel_jobs(tmp_path: Path) -> None:
+    source = tmp_path / "input"
+    nested = source / "nested"
+    nested.mkdir(parents=True)
+    for name, text in (("a.docx", "Alpha"), ("b.docx", "Beta")):
+        document = Document()
+        document.add_paragraph(text)
+        document.save(source / name)
+    document = Document()
+    document.add_paragraph("Gamma")
+    document.save(nested / "c.docx")
+    out = tmp_path / "out"
+
+    result = run_docmd(str(source), "-o", str(out), "--jobs", "2", "--no-ocr")
+
+    assert result.returncode == 0, result.stderr
+    assert "Alpha" in (out / "a.md").read_text(encoding="utf-8")
+    assert "Beta" in (out / "b.md").read_text(encoding="utf-8")
+    assert "Gamma" in (out / "nested" / "c.md").read_text(encoding="utf-8")
+
+
+def test_parallel_jobs_failure(tmp_path: Path) -> None:
+    source = tmp_path / "input"
+    source.mkdir()
+    good = Document()
+    good.add_paragraph("Good Doc")
+    good.save(source / "a.docx")
+    (source / "b.docx").write_bytes(b"not a valid document")
+    out = tmp_path / "out"
+
+    result = run_docmd(str(source), "-o", str(out), "--jobs", "2")
+
+    assert result.returncode == 2
+    assert not (out / "b.md").exists()
+
+
+def test_invalid_jobs() -> None:
+    result = run_docmd("missing.docx", "--jobs", "0")
+
+    assert result.returncode == 1
+    assert "--jobs must be at least 1" in result.stderr
+
+
 def load_docmd() -> ModuleType:
     loader = SourceFileLoader("docmd_cli", str(SCRIPT))
     spec = spec_from_file_location("docmd_cli", SCRIPT, loader=loader)
@@ -219,4 +262,3 @@ def test_verify_directory(tmp_path: Path) -> None:
     assert broken_result.returncode == 1
     assert "unbalanced code fence" in broken_result.stderr
     assert (broken_out / "a.md").is_file()
-    assert not (broken_out / "b.md").exists()

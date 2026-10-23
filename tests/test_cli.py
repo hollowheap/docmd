@@ -30,6 +30,8 @@ def test_option_contract() -> None:
         "--no-ocr",
         "--password",
         "--verify",
+        "--jobs",
+        "-j",
         "-q",
         "--quiet",
         "-v",

@@ -20,3 +20,4 @@
 - None recorded.
 - [x] D15: Publish the skill from this repository as a monorepo skill at `skills/docmd/`, installed with `npx skills add <owner>/<repo> --skill docmd`; `scripts/docmd` stays the source of truth and `scripts/dist.py` syncs it into the published tree | Why: skills.sh indexes public GitHub repos with no upload step, and one authored tree avoids drift between copies
 - [x] D16: Ship the skill under MIT with `SKILL.md` frontmatter carrying `name`, `description`, `license`, `compatibility`, and `metadata.version`, and link the three reference guides from `SKILL.md` | Why: agents may reproduce the skill verbatim, and linked guides are what make progressive disclosure work
+- [x] D17: Convert directory documents in isolated subprocess workers with `--jobs N`, defaulting to 2 | Why: OCR is CPU-bound, each worker already uses multiple cores, and separate processes avoid sharing PyMuPDF and RapidOCR state

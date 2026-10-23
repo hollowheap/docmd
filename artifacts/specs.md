@@ -40,7 +40,7 @@
 - [x] S37 [D11]: Output roots nested under the input tree are excluded from discovery so generated Markdown is never reconverted. | Verify: `uv run pytest tests/test_batch.py::test_output_inside_input -q`
 - [x] S38 [D12]: `--verify` ignores anchor, `http(s)`, `mailto`, `data`, `file`, and protocol-relative links; URL-decodes local paths and strips query/fragment before checks. | Verify: `uv run pytest tests/test_verify.py::test_link_targets -q`
 - [x] S39 [D12]: `--verify` treats `~~~` fences as code fences and reports unbalanced tilde fences. | Verify: `uv run pytest tests/test_verify.py::test_tilde_fences -q`
-- [x] S40 [D12]: Directory `--verify` checks each output against its own parent directory and stops with exit 1 on the first failure. | Verify: `uv run pytest tests/test_batch.py::test_verify_directory -q`
+- [x] S40 [D12]: Directory `--verify` checks each output against its own parent directory and returns exit 1 when any output fails; concurrent jobs may leave later outputs in place. | Verify: `uv run pytest tests/test_batch.py::test_verify_directory -q`
 - [x] S41 [D13]: Every `skills/docmd/reference/fixtures/sample.*` opens with its native parser, has a non-empty body, and contains media. | Verify: `uv run pytest tests/test_skill_layout.py::test_fixture_validity -q`
 - [x] S42 [D14]: `scripts/dist.py` rejects missing static files or PEP 723 markers, exits nonzero, and leaves an existing packaged script untouched. | Verify: `uv run pytest tests/test_skill_builder.py::test_missing_source -q`
 - [x] S43 [D14]: Repeated builder runs are byte-identical with mode `0o755` and mutate nothing outside `skills/docmd/` or temporary directories. | Verify: `uv run pytest tests/test_skill_builder.py::test_idempotent -q`
@@ -49,3 +49,4 @@
 - [x] S46 [D15]: `scripts/dist.py` smoke-converts every `skills/docmd/references/fixtures/sample.*` through the packaged script, asserting exit 0, non-empty Markdown, and extracted assets. | Verify: `uv run python scripts/dist.py`
 - [x] S47 [D16]: `skills/docmd/SKILL.md` frontmatter declares `name: docmd` matching the directory, a non-empty description, `license: MIT`, a `compatibility` line naming `uv`, and `metadata.version`; the body links `references/docx.md`, `references/pptx.md`, and `references/pdf.md`. | Verify: `uv run pytest tests/test_skill_layout.py::test_frontmatter_contract -q`
 - [x] S48 [D16]: The repository ships an MIT `LICENSE` file and `skills/docmd/README.md` describing install, usage, and exit codes. | Verify: `uv run pytest tests/test_skill_layout.py::test_skill_and_readme -q`
+- [x] S49 [D17]: Directory conversion accepts `--jobs N` and defaults to 2; each worker is a separate `docmd` process. | Verify: `uv run pytest tests/test_batch.py::test_parallel_jobs -q`
