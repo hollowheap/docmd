@@ -1,65 +1,251 @@
 # Plan
 
 - [x] T01 [S01] (blocked-by: none): Scaffold the Python project and single-file `scripts/docmd` PEP 723 CLI that prints its version without a pre-created virtualenv. | Verify: `uv run --script scripts/docmd --version`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T02 [S06] (blocked-by: T01): CLI seam parses an input path plus `-o/--out`, `--stdout`, `--no-images`, `--no-ocr`, `--password`, `--verify`, `-q/--quiet`, `-v/--version`, and `-h/--help`. | Verify: `uv run pytest tests/test_cli.py::test_option_contract -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T03 [S06] (blocked-by: T02): CLI reports missing input with usage text and a non-zero status. | Verify: `uv run pytest tests/test_cli.py::test_missing_input -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T04 [S07] (blocked-by: T03): Exit codes map success to `0`, CLI or runtime failure to `1`, corrupt documents to `2`, and encrypted documents without a valid password to `3`. | Verify: `uv run pytest tests/test_exit_codes.py -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T05 [S02] (blocked-by: T02): DOCX conversion emits ordered Markdown for paragraphs, heading styles, lists, inline images, and native tables via `python-docx`. | Verify: `uv run pytest tests/test_docx.py::test_block_extraction -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T06 [S11] (blocked-by: T05): DOCX headings `Heading 1` through `Heading 6` map to `#` through `######`, and bold large-font paragraphs promote by document hierarchy. | Verify: `uv run pytest tests/test_docx.py::test_heading_promotion -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T07 [S03] (blocked-by: T02): PPTX conversion emits every slide in order with shape text, tables, and speaker notes via `python-pptx`. | Verify: `uv run pytest tests/test_pptx.py::test_slide_extraction -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T08 [S10] (blocked-by: T07): PPTX Markdown uses `## Slide <N>: <title>`, `---` separators, and `> **Speaker Notes:** <content>` notes. | Verify: `uv run pytest tests/test_pptx.py::test_markdown_layout -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T09 [S04] (blocked-by: T02): PDF conversion preserves page text and exposes PyMuPDF span font size and bounding boxes for layout inference. | Verify: `uv run pytest tests/test_pdf.py::test_span_extraction -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T10 [S12] (blocked-by: T09): PDF heading inference maps font-size clusters to `#`, `##`, and `###`. | Verify: `uv run pytest tests/test_pdf.py::test_heading_inference -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T11 [S12] (blocked-by: T09): PDF multi-column reading order sorts text blocks top-to-bottom within visual columns. | Verify: `uv run pytest tests/test_pdf.py::test_column_order -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T12 [S12] (blocked-by: T09): PDF margin headers, footers, and page numbers are detected and stripped from output. | Verify: `uv run pytest tests/test_pdf.py::test_header_footer_suppression -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T13 [S13] (blocked-by: T05, T07, T09): Table normalization emits strict GFM pipe tables, flattens merged cells, and replaces internal cell newlines with `<br>`. | Verify: `uv run pytest tests/test_tables.py -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T14 [S08] (blocked-by: T05, T07, T09): File output writes a sibling `<filename>.assets/` directory and links images relatively. | Verify: `uv run pytest tests/test_media.py::test_file_assets -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T15 [S08] (blocked-by: T14): `--stdout` inlines extracted images as Base64 data URIs. | Verify: `uv run pytest tests/test_media.py::test_stdout_data_uris -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T16 [S08] (blocked-by: T14): `--no-images` suppresses image extraction and omits image Markdown. | Verify: `uv run pytest tests/test_media.py::test_no_images -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T17 [S05] (blocked-by: T01): OCR seam runs offline with bundled `rapidocr-onnxruntime` CPU models and no system binaries. | Verify: `uv run pytest tests/test_ocr.py::test_offline_engine -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T18 [S09] (blocked-by: T09, T17): PDF pages with fewer than 50 extractable characters trigger page OCR for paragraphs, headings, and tables. | Verify: `uv run pytest tests/test_ocr_policy.py::test_page_fallback -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T19 [S09] (blocked-by: T14, T17): Embedded image text appears as `> *[Image Text]*: ...` beneath the image link. | Verify: `uv run pytest tests/test_ocr_policy.py::test_image_caption -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T20 [S09] (blocked-by: T18, T19): Overlay reconciliation emits each text region once for searchable and sandwich PDFs. | Verify: `uv run pytest tests/test_ocr_policy.py::test_overlay_reconciliation -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T21 [S14] (blocked-by: T05, T07, T09): Directory input discovers non-hidden `.docx`, `.pptx`, and `.pdf` files recursively and mirrors subfolders under the output root. | Verify: `uv run pytest tests/test_batch.py::test_recursive_mirroring -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T22 [S14] (blocked-by: T21, T14): Asset directories are co-located with their Markdown file inside the mirrored output tree. | Verify: `uv run pytest tests/test_batch.py::test_asset_co_location -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T23 [S15] (blocked-by: T13): `--verify` fails when a GFM table row column count differs from the header. | Verify: `uv run pytest tests/test_verify.py::test_table_alignment -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T24 [S15] (blocked-by: T02): `--verify` fails when code fences are unbalanced. | Verify: `uv run pytest tests/test_verify.py::test_code_fences -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T25 [S15] (blocked-by: T14): `--verify` fails when a local asset link is missing or points to a zero-byte file. | Verify: `uv run pytest tests/test_verify.py::test_asset_links -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T26 [S16] (blocked-by: T01): `skills/docmd/SKILL.md` has valid `name` and `description` frontmatter, and `skills/docmd/scripts/README.md` exists. | Verify: `uv run pytest tests/test_skill_layout.py::test_skill_and_readme -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T27 [S16] (blocked-by: T26): `skills/docmd/reference/` includes DOCX, PPTX, and PDF guides plus sample fixtures. | Verify: `uv run pytest tests/test_skill_layout.py::test_reference_assets -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T28 [S16] (blocked-by: T27): `skills/docmd/scripts/docmd` is emitted executable with PEP 723 metadata. | Verify: `uv run pytest tests/test_skill_layout.py::test_executable_script -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T29 [S17] (blocked-by: T28): `scripts/dist.py` rebuilds `skills/docmd/` from source in a clean tree. | Verify: `uv run pytest tests/test_skill_builder.py::test_clean_rebuild -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T30 [S01] (blocked-by: T28): Packaged `skills/docmd/scripts/docmd` runs under uv and prints its version. | Verify: `uv run --script skills/docmd/scripts/docmd --version`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T31 [S17] (blocked-by: T29, T05, T07, T09, T14): Builder smoke-converts each sample fixture via the packaged script, asserting exit 0, non-empty Markdown, and expected asset creation. | Verify: `uv run python scripts/dist.py`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 
 - [x] T32 [S18] (blocked-by: none): PEP 723 dependencies, `pyproject.toml`, and `uv.lock` stay aligned, including the opencv override pairing. | Verify: `uv run pytest tests/test_packaging.py::test_dependency_parity -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T33 [S19] (blocked-by: none): DOCX numbered-list paragraphs emit `1. ` markers in order while bullets remain `- `. | Verify: `uv run pytest tests/test_docx.py::test_numbered_list_markers -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T34 [S20] (blocked-by: none): DOCX paragraphs containing only a picture emit the image data URI with no empty text block. | Verify: `uv run pytest tests/test_docx.py::test_image_only_paragraph -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T35 [S21] (blocked-by: none): PPTX picture shapes emit `data:<content-type>;base64,...` with extension and PNG fallbacks; undecodable pictures are skipped. | Verify: `uv run pytest tests/test_pptx_media.py::test_picture_mime -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T36 [S22] (blocked-by: none): PDF pages emit in document order without cross-page text reordering. | Verify: `uv run pytest tests/test_pdf.py::test_page_order -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T37 [S23] (blocked-by: none): Repeated PDF image references on a page emit once; invalid references are skipped without aborting. | Verify: `uv run pytest tests/test_pdf_media.py::test_xref_dedup -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T38 [S24] (blocked-by: none): OCR drops empty text and confidence below 0.5 before layout and captions. | Verify: `uv run pytest tests/test_ocr_policy.py::test_score_filter -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T39 [S25] (blocked-by: none): `-o` with a suffix writes that file; without a suffix creates the directory and writes `<stem>.md`. | Verify: `uv run pytest tests/test_cli.py::test_output_classification -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T40 [S26] (blocked-by: none): Directory conversion logs each written Markdown path to stderr unless `-q/--quiet`; errors always print. | Verify: `uv run pytest tests/test_cli.py::test_quiet_progress -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T41 [S27] (blocked-by: none): `--no-ocr` keeps image links but drops page fallback and captions; `--no-images` drops links and captions. | Verify: `uv run pytest tests/test_ocr_policy.py::test_no_ocr_keeps_images -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T42 [S28] (blocked-by: none): `--verify --stdout` validates data-URI Markdown and returns 1 on errors without writing files. | Verify: `uv run pytest tests/test_cli.py::test_stdout_verify -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T43 [S29] (blocked-by: none): CLI usage errors print usage and exit 1 rather than argparse's 2. | Verify: `uv run pytest tests/test_exit_codes.py::test_usage_error_exit_one -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T44 [S30] (blocked-by: none): Unsupported suffixes exit 1 with `unsupported input format` and create no output. | Verify: `uv run pytest tests/test_exit_codes.py::test_unsupported_extension -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T45 [S31] (blocked-by: none): Directory conversion stops at the first failing document and returns its code while keeping earlier outputs. | Verify: `uv run pytest tests/test_batch.py::test_partial_failure -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T46 [S32] (blocked-by: none): Assets are named `image-NNN.<ext>` in order; unknown MIME uses `.bin`; unrelated files survive. | Verify: `uv run pytest tests/test_media.py::test_asset_naming -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T47 [S33] (blocked-by: none): Non-image and non-base64 data URIs stay inline and create no assets. | Verify: `uv run pytest tests/test_media.py::test_non_image_data_uri -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T48 [S34] (blocked-by: none): DOCX zero-row tables produce no table block and PPTX blank-cell tables emit only a GFM header and separator. | Verify: `uv run pytest tests/test_tables.py::test_empty_tables -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T49 [S35] (blocked-by: none): PDF images and captions emit after their page's text and before the next page's text. | Verify: `uv run pytest tests/test_pdf_media.py::test_image_page_order -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T50 [S36] (blocked-by: none): Empty directory input exits 0, creates the output root, and discovery order is deterministic. | Verify: `uv run pytest tests/test_batch.py::test_empty_input -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T51 [S37] (blocked-by: none): Nested output roots are excluded from discovery so generated Markdown is never reconverted. | Verify: `uv run pytest tests/test_batch.py::test_output_inside_input -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T52 [S38] (blocked-by: none): `--verify` ignores remote/anchor/data/file/protocol-relative links and normalizes local paths before checks. | Verify: `uv run pytest tests/test_verify.py::test_link_targets -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T53 [S39] (blocked-by: none): `--verify` recognizes `~~~` fences and reports unbalanced tilde fences. | Verify: `uv run pytest tests/test_verify.py::test_tilde_fences -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T54 [S40] (blocked-by: none): Directory `--verify` checks each output against its parent and stops at the first failure. | Verify: `uv run pytest tests/test_batch.py::test_verify_directory -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T55 [S41] (blocked-by: none): Fixtures open natively with non-empty bodies and contain media. | Verify: `uv run pytest tests/test_skill_layout.py::test_fixture_validity -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T56 [S42] (blocked-by: T29): Builder rejects missing static files or PEP 723 markers without touching an existing packaged script. | Verify: `uv run pytest tests/test_skill_builder.py::test_missing_source -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T57 [S43] (blocked-by: T29): Repeated builds are byte-identical with mode 755 and do not mutate outside `skills/docmd/` or temp dirs. | Verify: `uv run pytest tests/test_skill_builder.py::test_idempotent -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T58 [S44] (blocked-by: none): `skills/docmd/` carries the publishable tree with an executable, byte-identical `scripts/docmd`, the three reference guides, and the three fixtures. | Verify: `uv run pytest tests/test_skill_layout.py -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T59 [S45] (blocked-by: T58): `scripts/dist.py` syncs the packaged script and rejects missing static files, PEP 723 markers, or frontmatter fields. | Verify: `uv run pytest tests/test_skill_builder.py -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T60 [S46] (blocked-by: T59): The builder smoke-converts each fixture in the published tree. | Verify: `uv run python scripts/dist.py`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T61 [S47] (blocked-by: T58): SKILL.md frontmatter carries name, description, license, compatibility, and version, and the body links the reference guides. | Verify: `uv run pytest tests/test_skill_layout.py::test_frontmatter_contract -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.
 - [x] T62 [S48] (blocked-by: T58): The repository ships an MIT LICENSE and a skill README with install, usage, and exit codes. | Verify: `uv run pytest tests/test_skill_layout.py::test_skill_and_readme -q`
+  - Files: Not recorded.
+  - Notes: Not recorded.
+  - Risk: Not recorded.

@@ -40,6 +40,6 @@
 
 ## References
 
-- `artifacts/specs.md` and `artifacts/decisions.md`: settled contracts.
+- `artifacts/requirements.md`, `artifacts/decisions.md`, and `artifacts/specs.md`: settled contracts.
 - `artifacts/plan.md`: active task queue and per-task verify commands.
 - `artifacts/context.md`: early scaffold notes; it predates the implementation and is stale on test status.

@@ -1,52 +1,246 @@
 # Specs
 
-- [x] S01 [D01]: `skills/docmd/scripts/docmd` is a single-file PEP 723 executable; `uv run --script skills/docmd/scripts/docmd --version` prints a version and exits 0 without a pre-created virtualenv. | Verify: `uv run --script skills/docmd/scripts/docmd --version`
-- [x] S02 [D02]: `docmd sample.docx --stdout` emits ordered Markdown for paragraphs, heading styles, lists, inline images, and native tables, parsed with `python-docx`. | Verify: `uv run pytest tests/test_docx.py::test_block_extraction -q`
-- [x] S03 [D03]: `docmd sample.pptx --stdout` emits every slide in order with shape text, tables, and speaker notes, parsed with `python-pptx`. | Verify: `uv run pytest tests/test_pptx.py::test_slide_extraction -q`
-- [x] S04 [D04]: `docmd sample.pdf --stdout` preserves page text and uses PyMuPDF span font size and bounding boxes for layout inference. | Verify: `uv run pytest tests/test_pdf.py::test_span_extraction -q`
-- [x] S05 [D05]: OCR runs offline with bundled `rapidocr-onnxruntime` CPU models and requires no external system binaries. | Verify: `uv run pytest tests/test_ocr.py::test_offline_engine -q`
-- [x] S06 [D06]: CLI accepts an input path plus `-o/--out`, `--stdout`, `--no-images`, `--no-ocr`, `--password`, `--verify`, `-q/--quiet`, `-v/--version`, and `-h/--help`; missing input prints usage and fails. | Verify: `uv run pytest tests/test_cli.py::test_option_contract -q`
-- [x] S07 [D07]: Process status is `0` on success, `1` on CLI or unhandled runtime failure, `2` on corrupt documents, and `3` on encrypted documents without a valid password. | Verify: `uv run pytest tests/test_exit_codes.py -q`
-- [x] S08 [D08]: File mode writes a sibling `<filename>.assets/` directory with relative links; `--stdout` inlines images as Base64 data URIs; `--no-images` omits all image Markdown. | Verify: `uv run pytest tests/test_media.py -q`
-- [x] S09 [D09]: PDF pages with fewer than 50 extractable characters trigger page OCR; embedded-image text appears as `> *[Image Text]*: ...` below the image; overlay reconciliation emits each text region once. | Verify: `uv run pytest tests/test_ocr_policy.py -q`
-- [x] S10 [D10]: PPTX Markdown uses `## Slide <N>: <title>`, `---` between slides, and `> **Speaker Notes:** <content>` for notes. | Verify: `uv run pytest tests/test_pptx.py::test_markdown_layout -q`
-- [x] S11 [D10]: DOCX `Heading 1` through `Heading 6` map to `#` through `######`, and unstyled bold large-font paragraphs promote according to the document font hierarchy. | Verify: `uv run pytest tests/test_docx.py::test_heading_promotion -q`
-- [x] S12 [D10]: PDF font-size clusters map oversized spans to `#`, `##`, and `###`; multi-column text sorts top-to-bottom within columns; repeated headers, footers, and page numbers are stripped. | Verify: `uv run pytest tests/test_pdf.py::test_pdf_layout -q`
-- [x] S13 [D10]: Tables use strict GFM pipe syntax; merged cells flatten to regular rows and columns; internal cell newlines become `<br>`. | Verify: `uv run pytest tests/test_tables.py -q`
-- [x] S14 [D11]: Directory input discovers non-hidden `.docx`, `.pptx`, and `.pdf` files recursively, mirrors subfolders under the output root, and co-locates each asset directory with its Markdown file. | Verify: `uv run pytest tests/test_batch.py -q`
-- [x] S15 [D12]: `--verify` fails when a GFM table row column count differs from the header, a code fence is unbalanced, or a referenced local asset is missing or zero bytes. | Verify: `uv run pytest tests/test_verify.py -q`
-- [x] S16 [D13]: `skills/docmd/` exposes `SKILL.md` with valid `name` and `description` frontmatter, executable `scripts/docmd`, `scripts/README.md`, format guides, and fixtures. | Verify: `uv run pytest tests/test_skill_layout.py -q`
-- [x] S17 [D14]: `scripts/dist.py` rebuilds `skills/docmd/` and converts each sample fixture through `skills/docmd/scripts/docmd`, asserting exit 0, non-empty Markdown, and expected asset creation. | Verify: `uv run python scripts/dist.py`
+- [x] S01 [R01] [D01]: `skills/docmd/scripts/docmd` is a single-file PEP 723 executable; `uv run --script skills/docmd/scripts/docmd --version` prints a version and exits 0 without a pre-created virtualenv. | Verify: `uv run --script skills/docmd/scripts/docmd --version`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
 
-- [x] S18 [D01]: PEP 723 `dependencies` in `scripts/docmd`, `pyproject.toml`, and `uv.lock` agree, including the `opencv-python` override pairing. | Verify: `uv run pytest tests/test_packaging.py::test_dependency_parity -q`
-- [x] S19 [D02]: DOCX `List Number` paragraphs emit `1. ` markers in document order; `List Bullet` paragraphs emit `- `. | Verify: `uv run pytest tests/test_docx.py::test_numbered_list_markers -q`
-- [x] S20 [D02]: DOCX paragraphs containing only a picture emit the image data URI and no empty text block. | Verify: `uv run pytest tests/test_docx.py::test_image_only_paragraph -q`
-- [x] S21 [D03]: PPTX picture shapes emit `data:<content-type>;base64,...`, falling back to extension-derived MIME and then `image/png`; undecodable pictures are skipped. | Verify: `uv run pytest tests/test_pptx_media.py::test_picture_mime -q`
-- [x] S22 [D04]: PDF pages emit in document order and text from one page is not reordered across page boundaries. | Verify: `uv run pytest tests/test_pdf.py::test_page_order -q`
-- [x] S23 [D04]: Repeated PDF image references on a page emit one image block; invalid references are skipped without aborting the conversion. | Verify: `uv run pytest tests/test_pdf_media.py::test_xref_dedup -q`
-- [x] S24 [D05]: OCR discards empty text and results with confidence below 0.5 before layout inference and caption emission. | Verify: `uv run pytest tests/test_ocr_policy.py::test_score_filter -q`
-- [x] S25 [D06]: `-o` is classified by `Path.suffix`: a suffix writes that exact file; no suffix creates the directory and writes `<stem>.md`. | Verify: `uv run pytest tests/test_cli.py::test_output_classification -q`
-- [x] S26 [D06]: Directory conversion logs each written Markdown path to stderr unless `-q/--quiet`; errors always print. | Verify: `uv run pytest tests/test_cli.py::test_quiet_progress -q`
-- [x] S27 [D09]: `--no-ocr` skips page fallback and image captions while retaining image links; `--no-images` removes links and captions. | Verify: `uv run pytest tests/test_ocr_policy.py::test_no_ocr_keeps_images -q`
-- [x] S28 [D06]: `--verify --stdout` validates data-URI Markdown and exits 1 on fence or table errors without writing files. | Verify: `uv run pytest tests/test_cli.py::test_stdout_verify -q`
-- [x] S29 [D07]: Usage and argument errors print `usage:` plus an error to stderr and exit 1, never argparse's default 2. | Verify: `uv run pytest tests/test_exit_codes.py::test_usage_error_exit_one -q`
-- [x] S30 [D07]: Unsupported file suffixes exit 1 with `unsupported input format` and write no output. | Verify: `uv run pytest tests/test_exit_codes.py::test_unsupported_extension -q`
-- [x] S31 [D07]: Directory conversion aborts at the first failing document, returns that document's exit code, and leaves earlier outputs in place. | Verify: `uv run pytest tests/test_batch.py::test_partial_failure -q`
-- [x] S32 [D08]: File-mode assets are named `image-NNN.<ext>` in conversion order; unknown MIME types use `.bin`; unrelated existing files are preserved. | Verify: `uv run pytest tests/test_media.py::test_asset_naming -q`
-- [x] S33 [D08]: Non-image or non-base64 data URIs remain inline and never create asset files. | Verify: `uv run pytest tests/test_media.py::test_non_image_data_uri -q`
-- [x] S34 [D10]: DOCX tables with zero rows emit no Markdown; PPTX tables with blank cells emit only a GFM header and separator. | Verify: `uv run pytest tests/test_tables.py::test_empty_tables -q`
-- [x] S35 [D10]: PDF image links and captions emit after their page's text and before the next page's text. | Verify: `uv run pytest tests/test_pdf_media.py::test_image_page_order -q`
-- [x] S36 [D11]: Empty directory input exits 0, creates the output root, and discovery returns sorted deterministic paths. | Verify: `uv run pytest tests/test_batch.py::test_empty_input -q`
-- [x] S37 [D11]: Output roots nested under the input tree are excluded from discovery so generated Markdown is never reconverted. | Verify: `uv run pytest tests/test_batch.py::test_output_inside_input -q`
-- [x] S38 [D12]: `--verify` ignores anchor, `http(s)`, `mailto`, `data`, `file`, and protocol-relative links; URL-decodes local paths and strips query/fragment before checks. | Verify: `uv run pytest tests/test_verify.py::test_link_targets -q`
-- [x] S39 [D12]: `--verify` treats `~~~` fences as code fences and reports unbalanced tilde fences. | Verify: `uv run pytest tests/test_verify.py::test_tilde_fences -q`
-- [x] S40 [D12]: Directory `--verify` checks each output against its own parent directory and returns exit 1 when any output fails; concurrent jobs may leave later outputs in place. | Verify: `uv run pytest tests/test_batch.py::test_verify_directory -q`
-- [x] S41 [D13]: Every `skills/docmd/reference/fixtures/sample.*` opens with its native parser, has a non-empty body, and contains media. | Verify: `uv run pytest tests/test_skill_layout.py::test_fixture_validity -q`
-- [x] S42 [D14]: `scripts/dist.py` rejects missing static files or PEP 723 markers, exits nonzero, and leaves an existing packaged script untouched. | Verify: `uv run pytest tests/test_skill_builder.py::test_missing_source -q`
-- [x] S43 [D14]: Repeated builder runs are byte-identical with mode `0o755` and mutate nothing outside `skills/docmd/` or temporary directories. | Verify: `uv run pytest tests/test_skill_builder.py::test_idempotent -q`
-- [x] S44 [D15]: `skills/docmd/` holds the publishable tree: `SKILL.md` at the directory root, an executable `scripts/docmd` byte-identical to `scripts/docmd`, `README.md`, `scripts/README.md`, `references/{docx,pptx,pdf}.md`, and `references/fixtures/sample.{docx,pptx,pdf}`. | Verify: `uv run pytest tests/test_skill_layout.py -q`
-- [x] S45 [D15]: `scripts/dist.py` syncs `scripts/docmd` into `skills/docmd/scripts/docmd` with mode `0o755` and fails with a nonzero exit when a static file, the PEP 723 metadata, or a SKILL.md frontmatter field is missing. | Verify: `uv run pytest tests/test_skill_builder.py -q`
-- [x] S46 [D15]: `scripts/dist.py` smoke-converts every `skills/docmd/references/fixtures/sample.*` through the packaged script, asserting exit 0, non-empty Markdown, and extracted assets. | Verify: `uv run python scripts/dist.py`
-- [x] S47 [D16]: `skills/docmd/SKILL.md` frontmatter declares `name: docmd` matching the directory, a non-empty description, `license: MIT`, a `compatibility` line naming `uv`, and `metadata.version`; the body links `references/docx.md`, `references/pptx.md`, and `references/pdf.md`. | Verify: `uv run pytest tests/test_skill_layout.py::test_frontmatter_contract -q`
-- [x] S48 [D16]: The repository ships an MIT `LICENSE` file and `skills/docmd/README.md` describing install, usage, and exit codes. | Verify: `uv run pytest tests/test_skill_layout.py::test_skill_and_readme -q`
-- [x] S49 [D17]: Directory conversion accepts `--jobs N` and defaults to 2; each worker is a separate `docmd` process. | Verify: `uv run pytest tests/test_batch.py::test_parallel_jobs -q`
+- [x] S02 [R02] [D02]: `docmd sample.docx --stdout` emits ordered Markdown for paragraphs, heading styles, lists, inline images, and native tables, parsed with `python-docx`. | Verify: `uv run pytest tests/test_docx.py::test_block_extraction -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S03 [R02] [D03]: `docmd sample.pptx --stdout` emits every slide in order with shape text, tables, and speaker notes, parsed with `python-pptx`. | Verify: `uv run pytest tests/test_pptx.py::test_slide_extraction -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S04 [R02] [D04]: `docmd sample.pdf --stdout` preserves page text and uses PyMuPDF span font size and bounding boxes for layout inference. | Verify: `uv run pytest tests/test_pdf.py::test_span_extraction -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S05 [R04] [D05]: OCR runs offline with bundled `rapidocr-onnxruntime` CPU models and requires no external system binaries. | Verify: `uv run pytest tests/test_ocr.py::test_offline_engine -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S06 [R06] [D06]: CLI accepts an input path plus `-o/--out`, `--stdout`, `--no-images`, `--no-ocr`, `--password`, `--verify`, `-q/--quiet`, `-v/--version`, and `-h/--help`; missing input prints usage and fails. | Verify: `uv run pytest tests/test_cli.py::test_option_contract -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S07 [R07] [D07]: Process status is `0` on success, `1` on CLI or unhandled runtime failure, `2` on corrupt documents, and `3` on encrypted documents without a valid password. | Verify: `uv run pytest tests/test_exit_codes.py -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S08 [R03] [D08]: File mode writes a sibling `<filename>.assets/` directory with relative links; `--stdout` inlines images as Base64 data URIs; `--no-images` omits all image Markdown. | Verify: `uv run pytest tests/test_media.py -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S09 [R04] [D09]: PDF pages with fewer than 50 extractable characters trigger page OCR; embedded-image text appears as `> *[Image Text]*: ...` below the image; overlay reconciliation emits each text region once. | Verify: `uv run pytest tests/test_ocr_policy.py -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S10 [R02] [D10]: PPTX Markdown uses `## Slide <N>: <title>`, `---` between slides, and `> **Speaker Notes:** <content>` for notes. | Verify: `uv run pytest tests/test_pptx.py::test_markdown_layout -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S11 [R02] [D10]: DOCX `Heading 1` through `Heading 6` map to `#` through `######`, and unstyled bold large-font paragraphs promote according to the document font hierarchy. | Verify: `uv run pytest tests/test_docx.py::test_heading_promotion -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S12 [R02] [D10]: PDF font-size clusters map oversized spans to `#`, `##`, and `###`; multi-column text sorts top-to-bottom within columns; repeated headers, footers, and page numbers are stripped. | Verify: `uv run pytest tests/test_pdf.py::test_pdf_layout -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S13 [R02] [D10]: Tables use strict GFM pipe syntax; merged cells flatten to regular rows and columns; internal cell newlines become `<br>`. | Verify: `uv run pytest tests/test_tables.py -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S14 [R05] [D11]: Directory input discovers non-hidden `.docx`, `.pptx`, and `.pdf` files recursively, mirrors subfolders under the output root, and co-locates each asset directory with its Markdown file. | Verify: `uv run pytest tests/test_batch.py -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S15 [R08] [D12]: `--verify` fails when a GFM table row column count differs from the header, a code fence is unbalanced, or a referenced local asset is missing or zero bytes. | Verify: `uv run pytest tests/test_verify.py -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S16 [R09] [D13]: `skills/docmd/` exposes `SKILL.md` with valid `name` and `description` frontmatter, executable `scripts/docmd`, `scripts/README.md`, format guides, and fixtures. | Verify: `uv run pytest tests/test_skill_layout.py -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S17 [R09] [D14]: `scripts/dist.py` rebuilds `skills/docmd/` and converts each sample fixture through `skills/docmd/scripts/docmd`, asserting exit 0, non-empty Markdown, and expected asset creation. | Verify: `uv run python scripts/dist.py`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S18 [R01] [D01]: PEP 723 `dependencies` in `scripts/docmd`, `pyproject.toml`, and `uv.lock` agree, including the `opencv-python` override pairing. | Verify: `uv run pytest tests/test_packaging.py::test_dependency_parity -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S19 [R02] [D02]: DOCX `List Number` paragraphs emit `1. ` markers in document order; `List Bullet` paragraphs emit `- `. | Verify: `uv run pytest tests/test_docx.py::test_numbered_list_markers -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S20 [R02] [D02]: DOCX paragraphs containing only a picture emit the image data URI and no empty text block. | Verify: `uv run pytest tests/test_docx.py::test_image_only_paragraph -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S21 [R02] [D03]: PPTX picture shapes emit `data:<content-type>;base64,...`, falling back to extension-derived MIME and then `image/png`; undecodable pictures are skipped. | Verify: `uv run pytest tests/test_pptx_media.py::test_picture_mime -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S22 [R02] [D04]: PDF pages emit in document order and text from one page is not reordered across page boundaries. | Verify: `uv run pytest tests/test_pdf.py::test_page_order -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S23 [R02] [D04]: Repeated PDF image references on a page emit one image block; invalid references are skipped without aborting the conversion. | Verify: `uv run pytest tests/test_pdf_media.py::test_xref_dedup -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S24 [R04] [D05]: OCR discards empty text and results with confidence below 0.5 before layout inference and caption emission. | Verify: `uv run pytest tests/test_ocr_policy.py::test_score_filter -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S25 [R06] [D06]: `-o` is classified by `Path.suffix`: a suffix writes that exact file; no suffix creates the directory and writes `<stem>.md`. | Verify: `uv run pytest tests/test_cli.py::test_output_classification -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S26 [R06] [D06]: Directory conversion logs each written Markdown path to stderr unless `-q/--quiet`; errors always print. | Verify: `uv run pytest tests/test_cli.py::test_quiet_progress -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S27 [R04] [D09]: `--no-ocr` skips page fallback and image captions while retaining image links; `--no-images` removes links and captions. | Verify: `uv run pytest tests/test_ocr_policy.py::test_no_ocr_keeps_images -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S28 [R06] [D06]: `--verify --stdout` validates data-URI Markdown and exits 1 on fence or table errors without writing files. | Verify: `uv run pytest tests/test_cli.py::test_stdout_verify -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S29 [R07] [D07]: Usage and argument errors print `usage:` plus an error to stderr and exit 1, never argparse's default 2. | Verify: `uv run pytest tests/test_exit_codes.py::test_usage_error_exit_one -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S30 [R07] [D07]: Unsupported file suffixes exit 1 with `unsupported input format` and write no output. | Verify: `uv run pytest tests/test_exit_codes.py::test_unsupported_extension -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S31 [R07] [D07]: Directory conversion aborts at the first failing document, returns that document's exit code, and leaves earlier outputs in place. | Verify: `uv run pytest tests/test_batch.py::test_partial_failure -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S32 [R03] [D08]: File-mode assets are named `image-NNN.<ext>` in conversion order; unknown MIME types use `.bin`; unrelated existing files are preserved. | Verify: `uv run pytest tests/test_media.py::test_asset_naming -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S33 [R03] [D08]: Non-image or non-base64 data URIs remain inline and never create asset files. | Verify: `uv run pytest tests/test_media.py::test_non_image_data_uri -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S34 [R02] [D10]: DOCX tables with zero rows emit no Markdown; PPTX tables with blank cells emit only a GFM header and separator. | Verify: `uv run pytest tests/test_tables.py::test_empty_tables -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S35 [R02] [D10]: PDF image links and captions emit after their page's text and before the next page's text. | Verify: `uv run pytest tests/test_pdf_media.py::test_image_page_order -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S36 [R05] [D11]: Empty directory input exits 0, creates the output root, and discovery returns sorted deterministic paths. | Verify: `uv run pytest tests/test_batch.py::test_empty_input -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S37 [R05] [D11]: Output roots nested under the input tree are excluded from discovery so generated Markdown is never reconverted. | Verify: `uv run pytest tests/test_batch.py::test_output_inside_input -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S38 [R08] [D12]: `--verify` ignores anchor, `http(s)`, `mailto`, `data`, `file`, and protocol-relative links; URL-decodes local paths and strips query/fragment before checks. | Verify: `uv run pytest tests/test_verify.py::test_link_targets -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S39 [R08] [D12]: `--verify` treats `~~~` fences as code fences and reports unbalanced tilde fences. | Verify: `uv run pytest tests/test_verify.py::test_tilde_fences -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S40 [R08] [D12]: Directory `--verify` checks each output against its own parent directory and returns exit 1 when any output fails; concurrent jobs may leave later outputs in place. | Verify: `uv run pytest tests/test_batch.py::test_verify_directory -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S41 [R09] [D13]: Every `skills/docmd/reference/fixtures/sample.*` opens with its native parser, has a non-empty body, and contains media. | Verify: `uv run pytest tests/test_skill_layout.py::test_fixture_validity -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S42 [R09] [D14]: `scripts/dist.py` rejects missing static files or PEP 723 markers, exits nonzero, and leaves an existing packaged script untouched. | Verify: `uv run pytest tests/test_skill_builder.py::test_missing_source -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S43 [R09] [D14]: Repeated builder runs are byte-identical with mode `0o755` and mutate nothing outside `skills/docmd/` or temporary directories. | Verify: `uv run pytest tests/test_skill_builder.py::test_idempotent -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S44 [R09] [D15]: `skills/docmd/` holds the publishable tree: `SKILL.md` at the directory root, an executable `scripts/docmd` byte-identical to `scripts/docmd`, `README.md`, `scripts/README.md`, `references/{docx,pptx,pdf}.md`, and `references/fixtures/sample.{docx,pptx,pdf}`. | Verify: `uv run pytest tests/test_skill_layout.py -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S45 [R09] [D15]: `scripts/dist.py` syncs `scripts/docmd` into `skills/docmd/scripts/docmd` with mode `0o755` and fails with a nonzero exit when a static file, the PEP 723 metadata, or a SKILL.md frontmatter field is missing. | Verify: `uv run pytest tests/test_skill_builder.py -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S46 [R09] [D15]: `scripts/dist.py` smoke-converts every `skills/docmd/references/fixtures/sample.*` through the packaged script, asserting exit 0, non-empty Markdown, and extracted assets. | Verify: `uv run python scripts/dist.py`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S47 [R09] [D16]: `skills/docmd/SKILL.md` frontmatter declares `name: docmd` matching the directory, a non-empty description, `license: MIT`, a `compatibility` line naming `uv`, and `metadata.version`; the body links `references/docx.md`, `references/pptx.md`, and `references/pdf.md`. | Verify: `uv run pytest tests/test_skill_layout.py::test_frontmatter_contract -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S48 [R09] [D16]: The repository ships an MIT `LICENSE` file and `skills/docmd/README.md` describing install, usage, and exit codes. | Verify: `uv run pytest tests/test_skill_layout.py::test_skill_and_readme -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.
+
+- [x] S49 [R05] [D17]: Directory conversion accepts `--jobs N` and defaults to 2; each worker is a separate `docmd` process. | Verify: `uv run pytest tests/test_batch.py::test_parallel_jobs -q`
+  - Seam: Not recorded.
+  - Behavior: Not recorded.
+  - Failures: Not recorded.

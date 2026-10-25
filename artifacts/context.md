@@ -43,5 +43,5 @@
 
 ## Settled Decisions
 
-- D01 through D16 are recorded in `artifacts/decisions.md`.
-- Specs S01 through S48 are recorded in `artifacts/specs.md`; `artifacts.sh status` reports pending work.
+- D01 through D17 are recorded in `artifacts/decisions.md`.
+- Specs S01 through S49 are recorded in `artifacts/specs.md`; `artifacts.sh status` reports pending work.
