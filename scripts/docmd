@@ -5,7 +5,8 @@
 #     "python-docx>=1.2",
 #     "python-pptx>=1.0",
 #     "pymupdf>=1.24",
-#     "rapidocr-onnxruntime>=1.4",
+#     "rapidocr-openvino>=1.3",
+#     "openvino>=2024.6,<2025",
 #     "opencv-python-headless>=4.9",
 #     "msoffcrypto-tool>=5.4",
 # ]
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import re
 import subprocess
 import sys
@@ -217,10 +219,83 @@ def verify_markdown(markdown: str, base_dir: Path | None = None) -> list[str]:
     return errors
 
 
-def load_ocr_engine():
-    from rapidocr_onnxruntime import RapidOCR
+_GPU_DISABLED = False
+_NPU_DISABLED = False
 
-    return RapidOCR()
+
+def _accelerator_compile(core, model):
+    import os
+
+    global _GPU_DISABLED, _NPU_DISABLED
+    preference = os.environ.get("DOCMD_OCR_DEVICE", "cpu").strip().lower()
+
+    if preference in ("auto", "gpu"):
+        if not _GPU_DISABLED and "GPU" in getattr(core, "available_devices", []):
+            try:
+                return core.compile_model(model=model, device_name="GPU")
+            except Exception:
+                _GPU_DISABLED = True
+        elif preference == "gpu":
+            _GPU_DISABLED = True
+
+    if preference in ("auto", "npu"):
+        if not _NPU_DISABLED and "NPU" in getattr(core, "available_devices", []):
+            try:
+                return core.compile_model(model=model, device_name="NPU")
+            except Exception:
+                _NPU_DISABLED = True
+        elif preference == "npu":
+            _NPU_DISABLED = True
+
+    if preference not in ("gpu", "npu"):
+        return None
+    return None
+
+
+def load_ocr_engine():
+    import os
+
+    from openvino.runtime import Core
+    from rapidocr_openvino import RapidOCR
+    from rapidocr_openvino.utils.infer_engine import OpenVINOInferSession
+
+    original_init = OpenVINOInferSession.__init__
+
+    def patched_init(self, config):
+        import os as _os
+
+        core = Core()
+        self._verify_model(config["model_path"])
+        model_onnx = core.read_model(config["model_path"])
+
+        cpu_nums = _os.cpu_count() or 1
+        infer_num_threads = config.get("inference_num_threads", -1)
+        if infer_num_threads != -1 and 1 <= infer_num_threads <= cpu_nums:
+            try:
+                core.set_property("CPU", {"INFERENCE_NUM_THREADS": str(infer_num_threads)})
+            except Exception:
+                pass
+
+        compiled = _accelerator_compile(core, model_onnx)
+        if compiled is None:
+            compiled = core.compile_model(model=model_onnx, device_name="CPU")
+        self.session = compiled.create_infer_request()
+
+    OpenVINOInferSession.__init__ = patched_init
+    try:
+        env_value = os.environ.get("DOCMD_OCR_THREADS")
+        if env_value is None:
+            threads = min(4, os.cpu_count() or 1)
+        else:
+            try:
+                threads = int(env_value or 0)
+            except ValueError:
+                threads = 0
+        if threads > 0:
+            return RapidOCR(inference_num_threads=threads)
+        return RapidOCR()
+    finally:
+        OpenVINOInferSession.__init__ = original_init
 
 
 def open_office_source(source: Path, password: str | None, opener):
@@ -717,6 +792,7 @@ def pdf_image_blocks(
     document = open_pdf(source, password)
     blocks: list[tuple[int, str]] = []
     engine = None
+    ocr_cache: dict[str, str] = {}
     try:
         for page in document:
             seen: set[int] = set()
@@ -742,7 +818,10 @@ def pdf_image_blocks(
                 if use_ocr:
                     if engine is None:
                         engine = load_ocr_engine()
-                    text = ocr_image_text(engine, image)
+                    digest = hashlib.sha256(image).hexdigest()
+                    if digest not in ocr_cache:
+                        ocr_cache[digest] = ocr_image_text(engine, image)
+                    text = ocr_cache[digest]
                     if text:
                         blocks.append((page.number, f"{IMAGE_TEXT_PREFIX}{text}"))
     finally:
