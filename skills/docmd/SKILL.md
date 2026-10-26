@@ -4,7 +4,7 @@ description: Convert DOCX, PPTX, and PDF documents into GitHub Flavored Markdown
 license: MIT
 compatibility: Requires `uv` to run the bundled PEP 723 script. OCR uses bundled CPU ONNX models and needs no system binaries.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # docmd
