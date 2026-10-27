@@ -2,9 +2,9 @@
 name: docmd
 description: Convert DOCX, PPTX, and PDF documents into GitHub Flavored Markdown with extracted images, GFM tables, speaker notes, and offline OCR. Use when a document, deck, or paper must become readable Markdown.
 license: MIT
-compatibility: Requires `uv` to run the bundled PEP 723 script. OCR uses bundled CPU ONNX models and needs no system binaries.
+compatibility: Requires `uv` to run the bundled PEP 723 script. OCR uses OpenVINO PP-OCRv6 models and needs no system binaries.
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 
 # docmd
@@ -19,7 +19,7 @@ Use `docmd` when an agent or developer needs readable Markdown from `.docx`,
 ## Install
 
 ```bash
-npx skills add <owner>/docmd --skill docmd
+npx skills@1.7.4 add hollowheap/docmd --skill docmd
 ```
 
 The skill ships one single-file PEP 723 script. `uv` runs it and resolves its
@@ -43,6 +43,14 @@ uv run --script scripts/docmd <input-path> [-o <out-path>] [--stdout]
 - `--verify` checks GFM table columns, code fences, and local asset links.
 - Exit codes: `0` success, `1` CLI or runtime failure, `2` corrupt document,
   `3` encrypted document without a valid password.
+
+## OCR
+
+- `DOCMD_OCR_DEVICE=cpu|gpu|npu|auto` selects OpenVINO hardware. Default:
+  `auto` (NPU, then GPU, then CPU).
+- `DOCMD_OCR_MODEL=tiny|small` selects the PP-OCRv6 model. Default: `tiny`.
+- `DOCMD_OCR_THREADS=N` limits OpenVINO CPU inference threads. Default:
+  `min(4, cpu_count)`.
 
 ## Consuming output
 

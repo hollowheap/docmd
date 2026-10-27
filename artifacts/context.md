@@ -30,7 +30,7 @@
 ## Gotchas
 
 - Keep PEP 723 `dependencies` in `scripts/docmd` in sync with `pyproject.toml`.
-- Keep `opencv-python-headless` and the `opencv-python` override in both manifests; RapidOCR imports fail without this pairing.
+- Keep `opencv-python-headless` in both manifests; RapidOCR imports fail without it.
 - PDFs with fewer than 50 extractable characters trigger OCR; pass `--no-ocr` or use longer digital text for layout tests.
 - `-o` is classified by `Path.suffix`; a directory path containing a dot is treated as a file.
 - `skills/docmd/references/fixtures/sample.*` share the stem `sample`; use separate output roots to avoid overwriting `sample.md`.

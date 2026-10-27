@@ -25,8 +25,8 @@ def test_dependency_parity() -> None:
 
     assert metadata["requires-python"] == pyproject["project"]["requires-python"]
     assert metadata["dependencies"] == pyproject["project"]["dependencies"]
-    assert metadata["tool"]["uv"]["override-dependencies"] == (
-        pyproject["tool"]["uv"]["override-dependencies"]
+    assert metadata.get("tool", {}).get("uv", {}).get("override-dependencies") == (
+        pyproject.get("tool", {}).get("uv", {}).get("override-dependencies")
     )
 
     locked = {package["name"] for package in lock["package"]}
@@ -36,4 +36,3 @@ def test_dependency_parity() -> None:
         assert name.group() in locked
 
     assert "opencv-python-headless" in locked
-    assert "opencv-python" in locked

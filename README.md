@@ -20,7 +20,23 @@ Convert DOCX, PPTX, and PDF documents into GitHub Flavored Markdown.
 
 - Python 3.11 or newer.
 - `uv` to run the script.
-- Linux, macOS, or Windows. OCR runs on CPU by default; OpenVINO can use an Intel GPU or NPU when available.
+- Linux, macOS, or Windows. OCR runs through OpenVINO and can use an Intel NPU or GPU, with CPU fallback.
+
+## Installation
+
+Run from a checkout:
+
+```bash
+git clone https://github.com/hollowheap/docmd.git
+cd docmd
+uv run --script scripts/docmd --version
+```
+
+Install as an agent skill:
+
+```bash
+npx skills@1.7.4 add hollowheap/docmd --skill docmd
+```
 
 ## Quick start
 
@@ -68,17 +84,20 @@ docmd INPUT [-o PATH] [--stdout] [--no-images] [--no-ocr]
 
 ## OCR
 
-OCR uses [RapidOCR](https://github.com/RapidAI/RapidOCR) models through OpenVINO. The default backend is CPU.
+OCR uses [RapidOCR](https://github.com/RapidAI/RapidOCR) PP-OCRv6 models through OpenVINO. The default model is `tiny` and the default device order is `auto`: NPU, then GPU, then CPU.
 
 ```bash
 # Force a backend: cpu, gpu, npu, or auto
 DOCMD_OCR_DEVICE=gpu uv run --script scripts/docmd scan.pdf --stdout
 
+# Use the larger PP-OCRv6 model
+DOCMD_OCR_MODEL=small uv run --script scripts/docmd scan.pdf --stdout
+
 # Limit OpenVINO CPU inference threads
 DOCMD_OCR_THREADS=4 uv run --script scripts/docmd scan.pdf --stdout
 ```
 
-`DOCMD_OCR_DEVICE=auto` tries GPU, then NPU, then CPU. The default `cpu` is the fastest option on this machine for the bundled OCR models. OCR results for identical images are cached for the duration of a conversion.
+`DOCMD_OCR_DEVICE=auto` tries NPU, then GPU, then CPU. Set `DOCMD_OCR_DEVICE=cpu` to force CPU. OCR results for identical images are cached for the duration of a conversion.
 
 PDF pages with fewer than 50 extractable characters trigger OCR fallback. Image text is emitted as `> *[Image Text]*: ...` beneath the image.
 
@@ -96,15 +115,9 @@ out/
 
 Images are referenced with relative links. `--stdout` keeps them inline as `data:` URIs. Non-image and non-base64 data URIs stay inline.
 
-## Install as a skill
+## Skill layout
 
-The publishable skill tree lives in `skills/docmd/`.
-
-```bash
-npx skills add <owner>/docmd --skill docmd
-```
-
-The skill directory contains `SKILL.md`, `README.md`, a script README, per-format reference guides, and sample fixtures.
+The publishable skill tree lives in `skills/docmd/` and contains `SKILL.md`, `README.md`, a script README, per-format reference guides, and sample fixtures.
 
 ## Development
 
@@ -121,7 +134,7 @@ uv run python scripts/dist.py
 
 `scripts/docmd` is the source of truth. `scripts/dist.py` syncs it into `skills/docmd/scripts/docmd`, validates the SKILL.md frontmatter and PEP 723 metadata, and smoke-converts each fixture.
 
-Keep PEP 723 dependencies in `scripts/docmd` in sync with `pyproject.toml`, then run `uv lock`. Keep `opencv-python-headless` and the `opencv-python` override in both manifests; RapidOCR imports fail without this pairing.
+Keep PEP 723 dependencies in `scripts/docmd` in sync with `pyproject.toml`, then run `uv lock`. Keep `opencv-python-headless` in both manifests; RapidOCR imports fail without it.
 
 ## License
 

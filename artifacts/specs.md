@@ -85,7 +85,7 @@
   - Behavior: Not recorded.
   - Failures: Not recorded.
 
-- [x] S18 [R01] [D01]: PEP 723 `dependencies` in `scripts/docmd`, `pyproject.toml`, and `uv.lock` agree, including the `opencv-python` override pairing. | Verify: `uv run pytest tests/test_packaging.py::test_dependency_parity -q`
+- [x] S18 [R01] [D01]: PEP 723 `dependencies` in `scripts/docmd`, `pyproject.toml`, and `uv.lock` agree. | Verify: `uv run pytest tests/test_packaging.py::test_dependency_parity -q`
   - Seam: Not recorded.
   - Behavior: Not recorded.
   - Failures: Not recorded.

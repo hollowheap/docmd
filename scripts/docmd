@@ -2,17 +2,14 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "python-docx>=1.2",
-#     "python-pptx>=1.0",
-#     "pymupdf>=1.24",
-#     "rapidocr-openvino>=1.3",
-#     "openvino>=2024.6,<2025",
-#     "opencv-python-headless>=4.9",
-#     "msoffcrypto-tool>=5.4",
+#     "python-docx==1.2.0",
+#     "python-pptx==1.0.2",
+#     "pymupdf==2.0",
+#     "rapidocr==3.10.0",
+#     "openvino==2026.4.1",
+#     "opencv-python-headless==5.0.0.93",
+#     "msoffcrypto-tool==6.0.0",
 # ]
-#
-# [tool.uv]
-# override-dependencies = ["opencv-python; sys_platform == 'never'"]
 # ///
 """docmd: convert Office documents and PDFs to GitHub Flavored Markdown."""
 
@@ -21,15 +18,17 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import os
 import re
 import subprocess
 import sys
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote, unquote
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 IMAGE_MIME_TYPES = {
     "png": "image/png",
@@ -91,6 +90,7 @@ ASCII_TRANSLATION = str.maketrans(
         0x25E6: "-",
         0x3000: " ",
         0xFEFF: "",
+        0xFFFD: "",
     }
 )
 
@@ -101,6 +101,73 @@ class CorruptDocumentError(Exception):
 
 class EncryptedDocumentError(Exception):
     """The input is encrypted and no valid password was supplied."""
+
+
+class ConversionOptions:
+    def __init__(
+        self,
+        include_images: bool = True,
+        use_ocr: bool = True,
+        password: str | None = None,
+        verify: bool = False,
+        quiet: bool = False,
+        stdout: bool = False,
+        jobs: int = 1,
+    ) -> None:
+        self.include_images = include_images
+        self.use_ocr = use_ocr
+        self.password = password
+        self.verify = verify
+        self.quiet = quiet
+        self.stdout = stdout
+        self.jobs = jobs
+
+    @classmethod
+    def from_args(cls, args: argparse.Namespace) -> "ConversionOptions":
+        return cls(
+            include_images=not args.no_images,
+            use_ocr=not args.no_ocr,
+            password=args.password,
+            verify=args.verify,
+            quiet=args.quiet,
+            stdout=args.stdout,
+            jobs=args.jobs,
+        )
+
+
+class OcrConfig:
+    def __init__(
+        self,
+        device: str = "auto",
+        model: str = "tiny",
+        threads: int = 0,
+    ) -> None:
+        self.device = device
+        self.model = model
+        self.threads = threads
+
+    @classmethod
+    def from_env(cls) -> "OcrConfig":
+        device = os.environ.get("DOCMD_OCR_DEVICE", "auto").strip().lower()
+        model = os.environ.get("DOCMD_OCR_MODEL", "tiny").strip().lower()
+        env_threads = os.environ.get("DOCMD_OCR_THREADS")
+        if env_threads is None:
+            threads = min(4, os.cpu_count() or 1)
+        else:
+            try:
+                threads = int(env_threads or 0)
+            except ValueError:
+                threads = 0
+        return cls(device=device, model=model, threads=threads)
+
+    def device_candidates(self) -> tuple[str, ...]:
+        if self.device == "cpu":
+            return ()
+        if self.device == "gpu":
+            return ("GPU",)
+        if self.device == "npu":
+            return ("NPU",)
+        return ("NPU", "GPU")
 
 
 class DocmdArgumentParser(argparse.ArgumentParser):
@@ -219,83 +286,80 @@ def verify_markdown(markdown: str, base_dir: Path | None = None) -> list[str]:
     return errors
 
 
-_GPU_DISABLED = False
-_NPU_DISABLED = False
-
-
-def _accelerator_compile(core, model):
-    import os
-
-    global _GPU_DISABLED, _NPU_DISABLED
-    preference = os.environ.get("DOCMD_OCR_DEVICE", "cpu").strip().lower()
-
-    if preference in ("auto", "gpu"):
-        if not _GPU_DISABLED and "GPU" in getattr(core, "available_devices", []):
-            try:
-                return core.compile_model(model=model, device_name="GPU")
-            except Exception:
-                _GPU_DISABLED = True
-        elif preference == "gpu":
-            _GPU_DISABLED = True
-
-    if preference in ("auto", "npu"):
-        if not _NPU_DISABLED and "NPU" in getattr(core, "available_devices", []):
-            try:
-                return core.compile_model(model=model, device_name="NPU")
-            except Exception:
-                _NPU_DISABLED = True
-        elif preference == "npu":
-            _NPU_DISABLED = True
-
-    if preference not in ("gpu", "npu"):
-        return None
+def _accelerator_compile(
+    core,
+    model,
+    compile_model,
+    config: OcrConfig,
+    disabled: dict[str, bool],
+):
+    available = getattr(core, "available_devices", [])
+    for device in config.device_candidates():
+        if disabled.get(device) or device not in available:
+            continue
+        try:
+            return compile_model(core, model, device_name=device)
+        except Exception:
+            disabled[device] = True
     return None
 
 
-def load_ocr_engine():
-    import os
+def _build_ocr_engine(config: OcrConfig):
+    from openvino import Core
+    from rapidocr import RapidOCR
+    from rapidocr.utils.typings import EngineType, ModelType, OCRVersion
 
-    from openvino.runtime import Core
-    from rapidocr_openvino import RapidOCR
-    from rapidocr_openvino.utils.infer_engine import OpenVINOInferSession
+    original_compile = Core.compile_model
+    disabled = {"GPU": False, "NPU": False}
 
-    original_init = OpenVINOInferSession.__init__
+    def patched_compile(self, model, device_name=None, compile_config=None):
+        if device_name and str(device_name).upper() != "CPU":
+            return original_compile(
+                self, model, device_name=device_name, config=compile_config
+            )
+        compiled = _accelerator_compile(
+            self, model, original_compile, config, disabled
+        )
+        if compiled is not None:
+            return compiled
+        return original_compile(
+            self, model, device_name="CPU", config=compile_config
+        )
 
-    def patched_init(self, config):
-        import os as _os
+    model_type = ModelType.TINY if config.model == "tiny" else ModelType.SMALL
+    params = {
+        "Det.engine_type": EngineType.OPENVINO,
+        "Det.ocr_version": OCRVersion.PPOCRV6,
+        "Det.model_type": model_type,
+        "Rec.engine_type": EngineType.OPENVINO,
+        "Rec.ocr_version": OCRVersion.PPOCRV6,
+        "Rec.model_type": model_type,
+        "Cls.engine_type": EngineType.OPENVINO,
+        "Global.log_level": "error",
+    }
+    if config.threads > 0:
+        params["EngineConfig.openvino.inference_num_threads"] = config.threads
 
-        core = Core()
-        self._verify_model(config["model_path"])
-        model_onnx = core.read_model(config["model_path"])
-
-        cpu_nums = _os.cpu_count() or 1
-        infer_num_threads = config.get("inference_num_threads", -1)
-        if infer_num_threads != -1 and 1 <= infer_num_threads <= cpu_nums:
-            try:
-                core.set_property("CPU", {"INFERENCE_NUM_THREADS": str(infer_num_threads)})
-            except Exception:
-                pass
-
-        compiled = _accelerator_compile(core, model_onnx)
-        if compiled is None:
-            compiled = core.compile_model(model=model_onnx, device_name="CPU")
-        self.session = compiled.create_infer_request()
-
-    OpenVINOInferSession.__init__ = patched_init
+    Core.compile_model = patched_compile
     try:
-        env_value = os.environ.get("DOCMD_OCR_THREADS")
-        if env_value is None:
-            threads = min(4, os.cpu_count() or 1)
-        else:
-            try:
-                threads = int(env_value or 0)
-            except ValueError:
-                threads = 0
-        if threads > 0:
-            return RapidOCR(inference_num_threads=threads)
-        return RapidOCR()
+        return RapidOCR(params=params)
     finally:
-        OpenVINOInferSession.__init__ = original_init
+        Core.compile_model = original_compile
+
+
+class OcrEngine:
+    def __init__(self, config: OcrConfig | None = None) -> None:
+        self.config = config or OcrConfig.from_env()
+        self._engine = None
+
+    def __call__(self, data):
+        if self._engine is None:
+            self._engine = _build_ocr_engine(self.config)
+        return self._engine(data)
+
+
+def load_ocr_engine(config: OcrConfig | None = None) -> OcrEngine:
+    return OcrEngine(config)
 
 
 def open_office_source(source: Path, password: str | None, opener):
@@ -671,14 +735,26 @@ def order_pdf_lines(
     return ordered_lines
 
 
+def ocr_items(engine, data):
+    result = engine(data)
+    if isinstance(result, tuple):
+        yield from result[0] or []
+        return
+    boxes = getattr(result, "boxes", None)
+    texts = getattr(result, "txts", None) or ()
+    scores = getattr(result, "scores", None) or ()
+    if boxes is None:
+        return
+    yield from zip(boxes, texts, scores)
+
+
 def ocr_pdf_page(page, engine) -> list[dict[str, object]]:
     pixmap = page.get_pixmap(dpi=200)
-    result, _ = engine(pixmap.tobytes("png"))
     scale_x = page.rect.width / pixmap.width
     scale_y = page.rect.height / pixmap.height
 
     lines: list[dict[str, object]] = []
-    for item in result or []:
+    for item in ocr_items(engine, pixmap.tobytes("png")):
         box, text, score = item
         text = text.strip()
         if not text or (score is not None and score < 0.5):
@@ -704,9 +780,8 @@ def ocr_pdf_page(page, engine) -> list[dict[str, object]]:
 
 
 def ocr_image_text(engine, image: bytes) -> str:
-    result, _ = engine(image)
     items = []
-    for item in result or []:
+    for item in ocr_items(engine, image):
         box, text, score = item
         text = text.strip()
         if not text or (score is not None and score < 0.5):
@@ -722,10 +797,12 @@ def extract_pdf_lines(
     source: Path,
     password: str | None = None,
     use_ocr: bool = True,
+    ocr_engine: OcrEngine | None = None,
 ) -> list[dict[str, object]]:
+    if use_ocr and ocr_engine is None:
+        ocr_engine = load_ocr_engine()
     document = open_pdf(source, password)
     lines: list[dict[str, object]] = []
-    ocr_engine = None
     try:
         for page in document:
             page_lines: list[dict[str, object]] = []
@@ -745,9 +822,9 @@ def extract_pdf_lines(
                             "page_height": page.rect.height,
                         }
                     )
-            if use_ocr and sum(len(line["text"]) for line in page_lines) < 50:
-                if ocr_engine is None:
-                    ocr_engine = load_ocr_engine()
+            if ocr_engine is not None and sum(
+                len(line["text"]) for line in page_lines
+            ) < 50:
                 page_lines = ocr_pdf_page(page, ocr_engine) or page_lines
             lines.extend(order_pdf_lines(page_lines, page.rect.width))
     finally:
@@ -788,10 +865,12 @@ def pdf_image_blocks(
     source: Path,
     password: str | None = None,
     use_ocr: bool = True,
+    ocr_engine: OcrEngine | None = None,
 ) -> list[tuple[int, str]]:
+    if use_ocr and ocr_engine is None:
+        ocr_engine = load_ocr_engine()
     document = open_pdf(source, password)
     blocks: list[tuple[int, str]] = []
-    engine = None
     ocr_cache: dict[str, str] = {}
     try:
         for page in document:
@@ -815,12 +894,10 @@ def pdf_image_blocks(
                 )
                 encoded = base64.b64encode(image).decode("ascii")
                 blocks.append((page.number, f"![](data:{mime_type};base64,{encoded})"))
-                if use_ocr:
-                    if engine is None:
-                        engine = load_ocr_engine()
+                if ocr_engine is not None:
                     digest = hashlib.sha256(image).hexdigest()
                     if digest not in ocr_cache:
-                        ocr_cache[digest] = ocr_image_text(engine, image)
+                        ocr_cache[digest] = ocr_image_text(ocr_engine, image)
                     text = ocr_cache[digest]
                     if text:
                         blocks.append((page.number, f"{IMAGE_TEXT_PREFIX}{text}"))
@@ -834,9 +911,14 @@ def convert_pdf(
     include_images: bool,
     password: str | None = None,
     use_ocr: bool = True,
+    ocr_engine: OcrEngine | None = None,
 ) -> str:
-    lines = strip_pdf_margins(extract_pdf_lines(source, password, use_ocr))
-    image_entries = pdf_image_blocks(source, password, use_ocr) if include_images else []
+    if use_ocr and ocr_engine is None:
+        ocr_engine = load_ocr_engine()
+    lines = strip_pdf_margins(extract_pdf_lines(source, password, use_ocr, ocr_engine))
+    image_entries = (
+        pdf_image_blocks(source, password, use_ocr, ocr_engine) if include_images else []
+    )
     page_text: dict[object, str] = {}
     for line in lines:
         page_number = line["page"]
@@ -930,7 +1012,13 @@ DATA_URI_RE = re.compile(r"!\[([^\]]*)\]\(data:(image/[^;)]+);base64,([A-Za-z0-9
 
 
 def sanitize_ascii(markdown: str) -> str:
-    return markdown.translate(ASCII_TRANSLATION)
+    text = unicodedata.normalize("NFKC", markdown)
+    text = "".join(
+        char
+        for char in text
+        if char in "\n\r\t" or unicodedata.category(char) not in {"Cc", "Cf", "Co", "Cs"}
+    )
+    return text.translate(ASCII_TRANSLATION)
 
 
 def write_markdown(markdown: str, output: Path) -> None:
@@ -972,26 +1060,27 @@ def discover_documents(source: Path, exclude: Path | None = None) -> list[Path]:
     return sorted(documents)
 
 
-def convert_source(source: Path, args: argparse.Namespace) -> tuple[str | None, int]:
+def exit_code_for(exc: Exception) -> int:
+    if isinstance(exc, EncryptedDocumentError):
+        return 3
+    if isinstance(exc, CorruptDocumentError):
+        return 2
+    return 1
+
+
+def convert_source(
+    source: Path, options: ConversionOptions
+) -> tuple[str | None, int]:
     try:
         markdown = convert_document(
             source,
-            include_images=not args.no_images,
-            password=args.password,
-            use_ocr=not args.no_ocr,
+            include_images=options.include_images,
+            password=options.password,
+            use_ocr=options.use_ocr,
         )
-    except EncryptedDocumentError as exc:
-        print(f"docmd: error: {exc}", file=sys.stderr)
-        return None, 3
-    except CorruptDocumentError as exc:
-        print(f"docmd: error: {exc}", file=sys.stderr)
-        return None, 2
-    except ValueError as exc:
-        print(f"docmd: error: {exc}", file=sys.stderr)
-        return None, 1
     except Exception as exc:
         print(f"docmd: error: {exc}", file=sys.stderr)
-        return None, 1
+        return None, exit_code_for(exc)
     return sanitize_ascii(markdown), 0
 
 
@@ -1008,7 +1097,9 @@ def document_output_path(out: Path, source: Path, document: Path) -> Path:
     return out / relative.parent / f"{relative.stem}.md"
 
 
-def document_command(document: Path, output: Path, args: argparse.Namespace) -> list[str]:
+def document_command(
+    document: Path, output: Path, options: ConversionOptions
+) -> list[str]:
     command = [
         sys.executable,
         str(Path(__file__).resolve()),
@@ -1017,19 +1108,37 @@ def document_command(document: Path, output: Path, args: argparse.Namespace) -> 
         str(output),
         "-q",
     ]
-    if args.no_images:
+    if not options.include_images:
         command.append("--no-images")
-    if args.no_ocr:
+    if not options.use_ocr:
         command.append("--no-ocr")
-    if args.password:
-        command.extend(["--password", args.password])
-    if args.verify:
+    if options.password:
+        command.extend(["--password", options.password])
+    if options.verify:
         command.append("--verify")
     return command
 
 
-def convert_directory(source: Path, out: Path, args: argparse.Namespace) -> int:
-    if args.stdout:
+def convert_one(
+    document: Path, output: Path, options: ConversionOptions
+) -> int:
+    markdown, status = convert_source(document, options)
+    if status != 0:
+        return status
+    write_markdown(markdown or "", output)
+    if not options.quiet:
+        print(f"docmd: wrote {output}", file=sys.stderr)
+    if options.verify and report_verify_errors(
+        output.read_text(encoding="utf-8"), output.parent
+    ):
+        return 1
+    return 0
+
+
+def convert_directory(
+    source: Path, out: Path, options: ConversionOptions
+) -> int:
+    if options.stdout:
         print(
             "docmd: error: --stdout is not supported for directory input",
             file=sys.stderr,
@@ -1050,28 +1159,23 @@ def convert_directory(source: Path, out: Path, args: argparse.Namespace) -> int:
     )
     documents = discover_documents(source, exclude)
 
-    if args.jobs == 1:
+    if options.jobs == 1:
         for document in documents:
-            markdown, status = convert_source(document, args)
+            output = document_output_path(out, source, document)
+            status = convert_one(document, output, options)
             if status != 0:
                 return status
-            output = document_output_path(out, source, document)
-            write_markdown(markdown or "", output)
-            if not args.quiet:
-                print(f"docmd: wrote {output}", file=sys.stderr)
-            if args.verify and report_verify_errors(
-                output.read_text(encoding="utf-8"), output.parent
-            ):
-                return 1
         return 0
 
-    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+    with ThreadPoolExecutor(max_workers=options.jobs) as pool:
         futures = {}
         for document in documents:
             output = document_output_path(out, source, document)
-            futures[pool.submit(
-                subprocess.run, document_command(document, output, args)
-            )] = output
+            futures[
+                pool.submit(
+                    subprocess.run, document_command(document, output, options)
+                )
+            ] = output
 
         for future in as_completed(futures):
             output = futures[future]
@@ -1080,7 +1184,7 @@ def convert_directory(source: Path, out: Path, args: argparse.Namespace) -> int:
                 for pending in futures:
                     pending.cancel()
                 return result.returncode
-            if not args.quiet:
+            if not options.quiet:
                 print(f"docmd: wrote {output}", file=sys.stderr)
     return 0
 
@@ -1090,20 +1194,21 @@ def main() -> int:
     if args.jobs < 1:
         print("docmd: error: --jobs must be at least 1", file=sys.stderr)
         return 1
+    options = ConversionOptions.from_args(args)
     source = Path(args.input_path)
     if not source.exists():
         print(f"docmd: error: input not found: {source}", file=sys.stderr)
         return 1
 
     if source.is_dir():
-        return convert_directory(source, Path(args.out), args)
+        return convert_directory(source, Path(args.out), options)
 
-    markdown, status = convert_source(source, args)
+    markdown, status = convert_source(source, options)
     if status != 0:
         return status
 
-    if args.stdout:
-        if args.verify and report_verify_errors(markdown or "", Path.cwd()):
+    if options.stdout:
+        if options.verify and report_verify_errors(markdown or "", Path.cwd()):
             return 1
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stdout.write(markdown or "")
@@ -1116,7 +1221,9 @@ def main() -> int:
         out.mkdir(parents=True, exist_ok=True)
         output = out / f"{source.stem}.md"
     write_markdown(markdown or "", output)
-    if args.verify and report_verify_errors(output.read_text(encoding="utf-8"), output.parent):
+    if options.verify and report_verify_errors(
+        output.read_text(encoding="utf-8"), output.parent
+    ):
         return 1
     return 0
 

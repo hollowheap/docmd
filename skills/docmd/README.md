@@ -13,7 +13,7 @@ Convert DOCX, PPTX, and PDF documents into GitHub Flavored Markdown.
 ## Install
 
 ```bash
-npx skills add <owner>/docmd --skill docmd
+npx skills@1.7.4 add hollowheap/docmd --skill docmd
 ```
 
 ## Usage
@@ -30,6 +30,9 @@ uv run --script scripts/docmd ./documents -o ./out
 - `--jobs N` converts up to N directory documents concurrently (default: 2).
 - Exit codes: `0` success, `1` CLI or runtime failure, `2` corrupt document,
   `3` encrypted document without a valid password.
+- OCR env: `DOCMD_OCR_DEVICE=cpu|gpu|npu|auto` (default `auto`),
+  `DOCMD_OCR_MODEL=tiny|small` (default `tiny`), and
+  `DOCMD_OCR_THREADS=N` (default `min(4, cpu_count)`).
 
 ## Reference
 

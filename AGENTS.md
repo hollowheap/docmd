@@ -16,7 +16,7 @@
 - Edit `scripts/docmd`, not `skills/docmd/`. `skills/docmd/` is the publishable tree: `SKILL.md`, `README.md`, scripts README, reference guides, and fixtures.
 - `scripts/dist.py` syncs `scripts/docmd` into `skills/docmd/scripts/docmd` (mode `0755`), validates the SKILL.md frontmatter and PEP 723 metadata, and smoke-converts every fixture. Run it after any change to `scripts/docmd`.
 - `scripts/docmd` is a PEP 723 script. Keep its `dependencies` in sync with `pyproject.toml`; run `uv lock` after dependency changes.
-- Keep `opencv-python-headless` and the `opencv-python` override in both manifests. RapidOCR imports fail without this pairing.
+- Keep `opencv-python-headless` in both manifests; RapidOCR imports fail without it.
 
 ## Distribution
 
