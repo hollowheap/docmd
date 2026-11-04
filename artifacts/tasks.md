@@ -1,0 +1,342 @@
+# Tasks
+
+### CLI & Runtime
+
+- [x] T01 [S01] (blocked-by: none): Scaffold the Python project and single-file `scripts/docmd` PEP 723 CLI that prints its version without a pre-created virtualenv.
+  - Verify: `uv run --script scripts/docmd --version`
+  - Files: `scripts/docmd`
+  - Notes: Scaffold the Python project and single-file `scripts/docmd` PEP 723 CLI that prints its version without a pre-created virtualenv.
+  - Risk: Low
+- [x] T02 [S06] (blocked-by: T01): CLI seam parses an input path plus `-o/--out`, `--stdout`, `--no-images`, `--no-ocr`, `--password`, `--verify`, `-q/--quiet`, `-v/--version`, and `-h/--help`.
+  - Verify: `uv run pytest tests/test_cli.py::test_option_contract -q`
+  - Files: `scripts/docmd`, `tests/test_cli.py`
+  - Notes: CLI seam parses an input path plus `-o/--out`, `--stdout`, `--no-images`, `--no-ocr`, `--password`, `--verify`, `-q/--quiet`, `-v/--version`, and `-h/--help`.
+  - Risk: Low
+- [x] T03 [S06] (blocked-by: T02): CLI reports missing input with usage text and a non-zero status.
+  - Verify: `uv run pytest tests/test_cli.py::test_missing_input -q`
+  - Files: `scripts/docmd`, `tests/test_cli.py`
+  - Notes: CLI reports missing input with usage text and a non-zero status.
+  - Risk: Low
+- [x] T04 [S07] (blocked-by: T03): Exit codes map success to `0`, CLI or runtime failure to `1`, corrupt documents to `2`, and encrypted documents without a valid password to `3`.
+  - Verify: `uv run pytest tests/test_exit_codes.py -q`
+  - Files: `scripts/docmd`, `tests/test_exit_codes.py`
+  - Notes: Exit codes map success to `0`, CLI or runtime failure to `1`, corrupt documents to `2`, and encrypted documents without a valid password to `3`.
+  - Risk: Low
+- [x] T32 [S18] (blocked-by: none): PEP 723 dependencies, `pyproject.toml`, and `uv.lock` stay aligned, including the opencv override pairing.
+  - Verify: `uv run pytest tests/test_packaging.py::test_dependency_parity -q`
+  - Files: `scripts/docmd`, `pyproject.toml`, `uv.lock`, `tests/test_packaging.py`
+  - Notes: PEP 723 dependencies, `pyproject.toml`, and `uv.lock` stay aligned, including the opencv override pairing.
+  - Risk: Medium
+- [x] T39 [S25] (blocked-by: none): `-o` with a suffix writes that file; without a suffix creates the directory and writes `<stem>.md`.
+  - Verify: `uv run pytest tests/test_cli.py::test_output_classification -q`
+  - Files: `scripts/docmd`, `tests/test_cli.py`
+  - Notes: `-o` with a suffix writes that file; without a suffix creates the directory and writes `<stem>.md`.
+  - Risk: Low
+- [x] T42 [S28] (blocked-by: none): `--verify --stdout` validates data-URI Markdown and returns 1 on errors without writing files.
+  - Verify: `uv run pytest tests/test_cli.py::test_stdout_verify -q`
+  - Files: `scripts/docmd`, `tests/test_cli.py`
+  - Notes: `--verify --stdout` validates data-URI Markdown and returns 1 on errors without writing files.
+  - Risk: Low
+- [x] T43 [S29] (blocked-by: none): CLI usage errors print usage and exit 1 rather than argparse's 2.
+  - Verify: `uv run pytest tests/test_exit_codes.py::test_usage_error_exit_one -q`
+  - Files: `scripts/docmd`, `tests/test_exit_codes.py`
+  - Notes: CLI usage errors print usage and exit 1 rather than argparse's 2.
+  - Risk: Low
+- [x] T44 [S30] (blocked-by: none): Unsupported suffixes exit 1 with `unsupported input format` and create no output.
+  - Verify: `uv run pytest tests/test_exit_codes.py::test_unsupported_extension -q`
+  - Files: `scripts/docmd`, `tests/test_exit_codes.py`
+  - Notes: Unsupported suffixes exit 1 with `unsupported input format` and create no output.
+  - Risk: Low
+
+### Document Parsing
+
+- [x] T05 [S02] (blocked-by: T02): DOCX conversion emits ordered Markdown for paragraphs, heading styles, lists, inline images, and native tables via `python-docx`.
+  - Verify: `uv run pytest tests/test_docx.py::test_block_extraction -q`
+  - Files: `scripts/docmd`, `tests/test_docx.py`
+  - Notes: DOCX conversion emits ordered Markdown for paragraphs, heading styles, lists, inline images, and native tables via `python-docx`.
+  - Risk: Medium
+- [x] T06 [S11] (blocked-by: T05): DOCX headings `Heading 1` through `Heading 6` map to `#` through `######`, and bold large-font paragraphs promote by document hierarchy.
+  - Verify: `uv run pytest tests/test_docx.py::test_heading_promotion -q`
+  - Files: `scripts/docmd`, `tests/test_docx.py`
+  - Notes: DOCX headings `Heading 1` through `Heading 6` map to `#` through `######`, and bold large-font paragraphs promote by document hierarchy.
+  - Risk: Medium
+- [x] T07 [S03] (blocked-by: T02): PPTX conversion emits every slide in order with shape text, tables, and speaker notes via `python-pptx`.
+  - Verify: `uv run pytest tests/test_pptx.py::test_slide_extraction -q`
+  - Files: `scripts/docmd`, `tests/test_pptx.py`
+  - Notes: PPTX conversion emits every slide in order with shape text, tables, and speaker notes via `python-pptx`.
+  - Risk: Medium
+- [x] T08 [S10] (blocked-by: T07): PPTX Markdown uses `## Slide <N>: <title>`, `---` separators, and `> **Speaker Notes:** <content>` notes.
+  - Verify: `uv run pytest tests/test_pptx.py::test_markdown_layout -q`
+  - Files: `scripts/docmd`, `tests/test_pptx.py`
+  - Notes: PPTX Markdown uses `## Slide <N>: <title>`, `---` separators, and `> **Speaker Notes:** <content>` notes.
+  - Risk: Medium
+- [x] T09 [S04] (blocked-by: T02): PDF conversion preserves page text and exposes PyMuPDF span font size and bounding boxes for layout inference.
+  - Verify: `uv run pytest tests/test_pdf.py::test_span_extraction -q`
+  - Files: `scripts/docmd`, `tests/test_pdf.py`
+  - Notes: PDF conversion preserves page text and exposes PyMuPDF span font size and bounding boxes for layout inference.
+  - Risk: Medium
+- [x] T10 [S12] (blocked-by: T09): PDF heading inference maps font-size clusters to `#`, `##`, and `###`.
+  - Verify: `uv run pytest tests/test_pdf.py::test_heading_inference -q`
+  - Files: `scripts/docmd`, `tests/test_pdf.py`
+  - Notes: PDF heading inference maps font-size clusters to `#`, `##`, and `###`.
+  - Risk: Medium
+- [x] T11 [S12] (blocked-by: T09): PDF multi-column reading order sorts text blocks top-to-bottom within visual columns.
+  - Verify: `uv run pytest tests/test_pdf.py::test_column_order -q`
+  - Files: `scripts/docmd`, `tests/test_pdf.py`
+  - Notes: PDF multi-column reading order sorts text blocks top-to-bottom within visual columns.
+  - Risk: Medium
+- [x] T12 [S12] (blocked-by: T09): PDF margin headers, footers, and page numbers are detected and stripped from output.
+  - Verify: `uv run pytest tests/test_pdf.py::test_header_footer_suppression -q`
+  - Files: `scripts/docmd`, `tests/test_pdf.py`
+  - Notes: PDF margin headers, footers, and page numbers are detected and stripped from output.
+  - Risk: Medium
+- [x] T13 [S13] (blocked-by: T05, T07, T09): Table normalization emits strict GFM pipe tables, flattens merged cells, and replaces internal cell newlines with `<br>`.
+  - Verify: `uv run pytest tests/test_tables.py -q`
+  - Files: `scripts/docmd`, `tests/test_tables.py`
+  - Notes: Table normalization emits strict GFM pipe tables, flattens merged cells, and replaces internal cell newlines with `<br>`.
+  - Risk: Low
+- [x] T33 [S19] (blocked-by: none): DOCX numbered-list paragraphs emit `1. ` markers in order while bullets remain `- `.
+  - Verify: `uv run pytest tests/test_docx.py::test_numbered_list_markers -q`
+  - Files: `scripts/docmd`, `tests/test_docx.py`
+  - Notes: DOCX numbered-list paragraphs emit `1. ` markers in order while bullets remain `- `.
+  - Risk: Low
+- [x] T34 [S20] (blocked-by: none): DOCX paragraphs containing only a picture emit the image data URI with no empty text block.
+  - Verify: `uv run pytest tests/test_docx.py::test_image_only_paragraph -q`
+  - Files: `scripts/docmd`, `tests/test_docx.py`
+  - Notes: DOCX paragraphs containing only a picture emit the image data URI with no empty text block.
+  - Risk: Low
+- [x] T35 [S21] (blocked-by: none): PPTX picture shapes emit `data:<content-type>;base64,...` with extension and PNG fallbacks; undecodable pictures are skipped.
+  - Verify: `uv run pytest tests/test_pptx_media.py::test_picture_mime -q`
+  - Files: `scripts/docmd`, `tests/test_pptx_media.py`
+  - Notes: PPTX picture shapes emit `data:<content-type>;base64,...` with extension and PNG fallbacks; undecodable pictures are skipped.
+  - Risk: Low
+- [x] T36 [S22] (blocked-by: none): PDF pages emit in document order without cross-page text reordering.
+  - Verify: `uv run pytest tests/test_pdf.py::test_page_order -q`
+  - Files: `scripts/docmd`, `tests/test_pdf.py`
+  - Notes: PDF pages emit in document order without cross-page text reordering.
+  - Risk: Low
+- [x] T37 [S23] (blocked-by: none): Repeated PDF image references on a page emit once; invalid references are skipped without aborting.
+  - Verify: `uv run pytest tests/test_pdf_media.py::test_xref_dedup -q`
+  - Files: `scripts/docmd`, `tests/test_pdf_media.py`
+  - Notes: Repeated PDF image references on a page emit once; invalid references are skipped without aborting.
+  - Risk: Low
+- [x] T48 [S34] (blocked-by: none): DOCX zero-row tables produce no table block and PPTX blank-cell tables emit only a GFM header and separator.
+  - Verify: `uv run pytest tests/test_tables.py::test_empty_tables -q`
+  - Files: `scripts/docmd`, `tests/test_tables.py`
+  - Notes: DOCX zero-row tables produce no table block and PPTX blank-cell tables emit only a GFM header and separator.
+  - Risk: Low
+- [x] T49 [S35] (blocked-by: none): PDF images and captions emit after their page's text and before the next page's text.
+  - Verify: `uv run pytest tests/test_pdf_media.py::test_image_page_order -q`
+  - Files: `scripts/docmd`, `tests/test_pdf_media.py`
+  - Notes: PDF images and captions emit after their page's text and before the next page's text.
+  - Risk: Low
+
+### Media Extraction
+
+- [x] T14 [S08] (blocked-by: T05, T07, T09): File output writes a sibling `<filename>.assets/` directory and links images relatively.
+  - Verify: `uv run pytest tests/test_media.py::test_file_assets -q`
+  - Files: `scripts/docmd`, `tests/test_media.py`
+  - Notes: File output writes a sibling `<filename>.assets/` directory and links images relatively.
+  - Risk: Medium
+- [x] T15 [S08] (blocked-by: T14): `--stdout` inlines extracted images as Base64 data URIs.
+  - Verify: `uv run pytest tests/test_media.py::test_stdout_data_uris -q`
+  - Files: `scripts/docmd`, `tests/test_media.py`
+  - Notes: `--stdout` inlines extracted images as Base64 data URIs.
+  - Risk: Medium
+- [x] T16 [S08] (blocked-by: T14): `--no-images` suppresses image extraction and omits image Markdown.
+  - Verify: `uv run pytest tests/test_media.py::test_no_images -q`
+  - Files: `scripts/docmd`, `tests/test_media.py`
+  - Notes: `--no-images` suppresses image extraction and omits image Markdown.
+  - Risk: Low
+- [x] T46 [S32] (blocked-by: none): Assets are named `image-NNN.<ext>` in order; unknown MIME uses `.bin`; unrelated files survive.
+  - Verify: `uv run pytest tests/test_media.py::test_asset_naming -q`
+  - Files: `scripts/docmd`, `tests/test_media.py`
+  - Notes: Assets are named `image-NNN.<ext>` in order; unknown MIME uses `.bin`; unrelated files survive.
+  - Risk: Low
+- [x] T47 [S33] (blocked-by: none): Non-image and non-base64 data URIs stay inline and create no assets.
+  - Verify: `uv run pytest tests/test_media.py::test_non_image_data_uri -q`
+  - Files: `scripts/docmd`, `tests/test_media.py`
+  - Notes: Non-image and non-base64 data URIs stay inline and create no assets.
+  - Risk: Low
+
+### Optical Character Recognition
+
+- [x] T17 [S05] (blocked-by: T01): OCR seam runs offline with bundled `rapidocr-onnxruntime` CPU models and no system binaries.
+  - Verify: `uv run pytest tests/test_ocr.py::test_offline_engine -q`
+  - Files: `scripts/docmd`, `tests/test_ocr.py`
+  - Notes: OCR seam runs offline with bundled `rapidocr-onnxruntime` CPU models and no system binaries.
+  - Risk: Medium
+- [x] T18 [S09] (blocked-by: T09, T17): PDF pages with fewer than 50 extractable characters trigger page OCR for paragraphs, headings, and tables.
+  - Verify: `uv run pytest tests/test_ocr_policy.py::test_page_fallback -q`
+  - Files: `scripts/docmd`, `tests/test_ocr_policy.py`
+  - Notes: PDF pages with fewer than 50 extractable characters trigger page OCR for paragraphs, headings, and tables.
+  - Risk: Medium
+- [x] T19 [S09] (blocked-by: T14, T17): Embedded image text appears as `> *[Image Text]*: ...` beneath the image link.
+  - Verify: `uv run pytest tests/test_ocr_policy.py::test_image_caption -q`
+  - Files: `scripts/docmd`, `tests/test_ocr_policy.py`
+  - Notes: Embedded image text appears as `> *[Image Text]*: ...` beneath the image link.
+  - Risk: Medium
+- [x] T20 [S09] (blocked-by: T18, T19): Overlay reconciliation emits each text region once for searchable and sandwich PDFs.
+  - Verify: `uv run pytest tests/test_ocr_policy.py::test_overlay_reconciliation -q`
+  - Files: `scripts/docmd`, `tests/test_ocr_policy.py`
+  - Notes: Overlay reconciliation emits each text region once for searchable and sandwich PDFs.
+  - Risk: Medium
+- [x] T38 [S24] (blocked-by: none): OCR drops empty text and confidence below 0.5 before layout and captions.
+  - Verify: `uv run pytest tests/test_ocr_policy.py::test_score_filter -q`
+  - Files: `scripts/docmd`, `tests/test_ocr_policy.py`
+  - Notes: OCR drops empty text and confidence below 0.5 before layout and captions.
+  - Risk: Low
+- [x] T41 [S27] (blocked-by: none): `--no-ocr` keeps image links but drops page fallback and captions; `--no-images` drops links and captions.
+  - Verify: `uv run pytest tests/test_ocr_policy.py::test_no_ocr_keeps_images -q`
+  - Files: `scripts/docmd`, `tests/test_ocr_policy.py`
+  - Notes: `--no-ocr` keeps image links but drops page fallback and captions; `--no-images` drops links and captions.
+  - Risk: Low
+- [x] T64 [S50] (blocked-by: none): Integrate `rapid-layout` PP-Structure ONNX model to classify layout blocks and restore multi-column reading order.
+  - Verify: `uv run pytest tests/test_ocr.py::test_offline_layout_engine tests/test_ocr.py::test_order_lines_by_layout -q`
+  - Files: `scripts/docmd`, `pyproject.toml`, `tests/test_ocr.py`
+  - Notes: Integrate `rapid-layout` PP-Structure ONNX model to classify layout blocks and restore multi-column reading order.
+  - Risk: Medium
+
+### Batch Processing
+
+- [x] T21 [S14] (blocked-by: T05, T07, T09): Directory input discovers non-hidden `.docx`, `.pptx`, and `.pdf` files recursively and mirrors subfolders under the output root.
+  - Verify: `uv run pytest tests/test_batch.py::test_recursive_mirroring -q`
+  - Files: `scripts/docmd`, `tests/test_batch.py`
+  - Notes: Directory input discovers non-hidden `.docx`, `.pptx`, and `.pdf` files recursively and mirrors subfolders under the output root.
+  - Risk: Medium
+- [x] T22 [S14] (blocked-by: T21, T14): Asset directories are co-located with their Markdown file inside the mirrored output tree.
+  - Verify: `uv run pytest tests/test_batch.py::test_asset_co_location -q`
+  - Files: `scripts/docmd`, `tests/test_batch.py`
+  - Notes: Asset directories are co-located with their Markdown file inside the mirrored output tree.
+  - Risk: Medium
+- [x] T40 [S26] (blocked-by: none): Directory conversion logs each written Markdown path to stderr unless `-q/--quiet`; errors always print.
+  - Verify: `uv run pytest tests/test_cli.py::test_quiet_progress -q`
+  - Files: `scripts/docmd`, `tests/test_cli.py`
+  - Notes: Directory conversion logs each written Markdown path to stderr unless `-q/--quiet`; errors always print.
+  - Risk: Low
+- [x] T45 [S31] (blocked-by: none): Directory conversion stops at the first failing document and returns its code while keeping earlier outputs.
+  - Verify: `uv run pytest tests/test_batch.py::test_partial_failure -q`
+  - Files: `scripts/docmd`, `tests/test_batch.py`
+  - Notes: Directory conversion stops at the first failing document and returns its code while keeping earlier outputs.
+  - Risk: Medium
+- [x] T50 [S36] (blocked-by: none): Empty directory input exits 0, creates the output root, and discovery order is deterministic.
+  - Verify: `uv run pytest tests/test_batch.py::test_empty_input -q`
+  - Files: `scripts/docmd`, `tests/test_batch.py`
+  - Notes: Empty directory input exits 0, creates the output root, and discovery order is deterministic.
+  - Risk: Low
+- [x] T51 [S37] (blocked-by: none): Nested output roots are excluded from discovery so generated Markdown is never reconverted.
+  - Verify: `uv run pytest tests/test_batch.py::test_output_inside_input -q`
+  - Files: `scripts/docmd`, `tests/test_batch.py`
+  - Notes: Nested output roots are excluded from discovery so generated Markdown is never reconverted.
+  - Risk: Low
+- [x] T63 [S49] (blocked-by: none): Directory conversion accepts `--jobs N` and defaults to 2 with warm in-process workers.
+  - Verify: `uv run pytest tests/test_batch.py::test_parallel_jobs -q`
+  - Files: `scripts/docmd`, `tests/test_batch.py`
+  - Notes: Directory conversion accepts `--jobs N` and defaults to 2 with warm in-process workers sharing OCR models and cache.
+  - Risk: Medium
+
+### Verification Mode
+
+- [x] T23 [S15] (blocked-by: T13): `--verify` fails when a GFM table row column count differs from the header.
+  - Verify: `uv run pytest tests/test_verify.py::test_table_alignment -q`
+  - Files: `scripts/docmd`, `tests/test_verify.py`
+  - Notes: `--verify` fails when a GFM table row column count differs from the header.
+  - Risk: Low
+- [x] T24 [S15] (blocked-by: T02): `--verify` fails when code fences are unbalanced.
+  - Verify: `uv run pytest tests/test_verify.py::test_code_fences -q`
+  - Files: `scripts/docmd`, `tests/test_verify.py`
+  - Notes: `--verify` fails when code fences are unbalanced.
+  - Risk: Low
+- [x] T25 [S15] (blocked-by: T14): `--verify` fails when a local asset link is missing or points to a zero-byte file.
+  - Verify: `uv run pytest tests/test_verify.py::test_asset_links -q`
+  - Files: `scripts/docmd`, `tests/test_verify.py`
+  - Notes: `--verify` fails when a local asset link is missing or points to a zero-byte file.
+  - Risk: Low
+- [x] T52 [S38] (blocked-by: none): `--verify` ignores remote/anchor/data/file/protocol-relative links and normalizes local paths before checks.
+  - Verify: `uv run pytest tests/test_verify.py::test_link_targets -q`
+  - Files: `scripts/docmd`, `tests/test_verify.py`
+  - Notes: `--verify` ignores remote/anchor/data/file/protocol-relative links and normalizes local paths before checks.
+  - Risk: Low
+- [x] T53 [S39] (blocked-by: none): `--verify` recognizes `~~~` fences and reports unbalanced tilde fences.
+  - Verify: `uv run pytest tests/test_verify.py::test_tilde_fences -q`
+  - Files: `scripts/docmd`, `tests/test_verify.py`
+  - Notes: `--verify` recognizes `~~~` fences and reports unbalanced tilde fences.
+  - Risk: Low
+- [x] T54 [S40] (blocked-by: none): Directory `--verify` checks each output against its parent and stops at the first failure.
+  - Verify: `uv run pytest tests/test_batch.py::test_verify_directory -q`
+  - Files: `scripts/docmd`, `tests/test_batch.py`
+  - Notes: Directory `--verify` checks each output against its parent and stops at the first failure.
+  - Risk: Medium
+
+### Skill Packaging
+
+- [x] T26 [S16] (blocked-by: T01): `skills/docmd/SKILL.md` has valid `name` and `description` frontmatter, and `skills/docmd/scripts/README.md` exists.
+  - Verify: `uv run pytest tests/test_skill_layout.py::test_skill_and_readme -q`
+  - Files: `skills/docmd/SKILL.md`, `skills/docmd/scripts/README.md`, `tests/test_skill_layout.py`
+  - Notes: `skills/docmd/SKILL.md` has valid `name` and `description` frontmatter, and `skills/docmd/scripts/README.md` exists.
+  - Risk: Low
+- [x] T27 [S16] (blocked-by: T26): `skills/docmd/reference/` includes DOCX, PPTX, and PDF guides plus sample fixtures.
+  - Verify: `uv run pytest tests/test_skill_layout.py::test_reference_assets -q`
+  - Files: `skills/docmd/references/docx.md`, `skills/docmd/references/pptx.md`, `skills/docmd/references/pdf.md`, `skills/docmd/references/fixtures`, `tests/test_skill_layout.py`
+  - Notes: `skills/docmd/reference/` includes DOCX, PPTX, and PDF guides plus sample fixtures.
+  - Risk: Low
+- [x] T28 [S16] (blocked-by: T27): `skills/docmd/scripts/docmd` is emitted executable with PEP 723 metadata.
+  - Verify: `uv run pytest tests/test_skill_layout.py::test_executable_script -q`
+  - Files: `skills/docmd/scripts/docmd`, `tests/test_skill_layout.py`
+  - Notes: `skills/docmd/scripts/docmd` is emitted executable with PEP 723 metadata.
+  - Risk: Low
+- [x] T29 [S17] (blocked-by: T28): `scripts/dist.py` rebuilds `skills/docmd/` from source in a clean tree.
+  - Verify: `uv run pytest tests/test_skill_builder.py::test_clean_rebuild -q`
+  - Files: `scripts/dist.py`, `skills/docmd`, `tests/test_skill_builder.py`
+  - Notes: `scripts/dist.py` rebuilds `skills/docmd/` from source in a clean tree.
+  - Risk: Medium
+- [x] T30 [S01] (blocked-by: T28): Packaged `skills/docmd/scripts/docmd` runs under uv and prints its version.
+  - Verify: `uv run --script skills/docmd/scripts/docmd --version`
+  - Files: `skills/docmd/scripts/docmd`
+  - Notes: Packaged `skills/docmd/scripts/docmd` runs under uv and prints its version.
+  - Risk: Low
+- [x] T31 [S17] (blocked-by: T29, T05, T07, T09, T14): Builder smoke-converts each sample fixture via the packaged script, asserting exit 0, non-empty Markdown, and expected asset creation.
+  - Verify: `uv run python scripts/dist.py`
+  - Files: `scripts/dist.py`, `skills/docmd/references/fixtures`, `tests/test_skill_builder.py`
+  - Notes: Builder smoke-converts each sample fixture via the packaged script, asserting exit 0, non-empty Markdown, and expected asset creation.
+  - Risk: Medium
+- [x] T55 [S41] (blocked-by: none): Fixtures open natively with non-empty bodies and contain media.
+  - Verify: `uv run pytest tests/test_skill_layout.py::test_fixture_validity -q`
+  - Files: `skills/docmd/references/fixtures`, `tests/test_skill_layout.py`
+  - Notes: Fixtures open natively with non-empty bodies and contain media.
+  - Risk: Low
+- [x] T56 [S42] (blocked-by: T29): Builder rejects missing static files or PEP 723 markers without touching an existing packaged script.
+  - Verify: `uv run pytest tests/test_skill_builder.py::test_missing_source -q`
+  - Files: `scripts/dist.py`, `tests/test_skill_builder.py`
+  - Notes: Builder rejects missing static files or PEP 723 markers without touching an existing packaged script.
+  - Risk: Low
+- [x] T57 [S43] (blocked-by: T29): Repeated builds are byte-identical with mode 755 and do not mutate outside `skills/docmd/` or temp dirs.
+  - Verify: `uv run pytest tests/test_skill_builder.py::test_idempotent -q`
+  - Files: `scripts/dist.py`, `tests/test_skill_builder.py`
+  - Notes: Repeated builds are byte-identical with mode 755 and do not mutate outside `skills/docmd/` or temp dirs.
+  - Risk: Low
+- [x] T58 [S44] (blocked-by: none): `skills/docmd/` carries the publishable tree with an executable, byte-identical `scripts/docmd`, the three reference guides, and the three fixtures.
+  - Verify: `uv run pytest tests/test_skill_layout.py -q`
+  - Files: `skills/docmd`, `tests/test_skill_layout.py`
+  - Notes: `skills/docmd/` carries the publishable tree with an executable, byte-identical `scripts/docmd`, the three reference guides, and the three fixtures.
+  - Risk: Low
+- [x] T59 [S45] (blocked-by: T58): `scripts/dist.py` syncs the packaged script and rejects missing static files, PEP 723 markers, or frontmatter fields.
+  - Verify: `uv run pytest tests/test_skill_builder.py -q`
+  - Files: `scripts/dist.py`, `tests/test_skill_builder.py`
+  - Notes: `scripts/dist.py` syncs the packaged script and rejects missing static files, PEP 723 markers, or frontmatter fields.
+  - Risk: Medium
+- [x] T60 [S46] (blocked-by: T59): The builder smoke-converts each fixture in the published tree.
+  - Verify: `uv run python scripts/dist.py`
+  - Files: `scripts/dist.py`, `skills/docmd/references/fixtures`, `tests/test_skill_builder.py`
+  - Notes: The builder smoke-converts each fixture in the published tree.
+  - Risk: Medium
+- [x] T61 [S47] (blocked-by: T58): SKILL.md frontmatter carries name, description, license, compatibility, and version, and the body links the reference guides.
+  - Verify: `uv run pytest tests/test_skill_layout.py::test_frontmatter_contract -q`
+  - Files: `skills/docmd/SKILL.md`, `tests/test_skill_layout.py`
+  - Notes: SKILL.md frontmatter carries name, description, license, compatibility, and version, and the body links the reference guides.
+  - Risk: Low
+- [x] T62 [S48] (blocked-by: T58): The repository ships an MIT LICENSE and a skill README with install, usage, and exit codes.
+  - Verify: `uv run pytest tests/test_skill_layout.py::test_skill_and_readme -q`
+  - Files: `LICENSE`, `skills/docmd/README.md`, `tests/test_skill_layout.py`
+  - Notes: The repository ships an MIT LICENSE and a skill README with install, usage, and exit codes.
+  - Risk: Low

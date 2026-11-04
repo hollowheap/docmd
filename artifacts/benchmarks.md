@@ -99,6 +99,94 @@ PP-OCRv4 CPU, same PDF, `DOCMD_OCR_THREADS` varied:
 
 Four threads were fastest in this run. The default is `min(4, cpu_count)` and can be overridden with `DOCMD_OCR_THREADS`.
 
+## Test Sample Fixtures
+
+Measurements taken on repository sample fixtures (`skills/docmd/references/fixtures/sample.{docx,pptx,pdf}`). Averaged over 2-3 iterations.
+
+| Workload | Configuration | In-Process Mean | In-Process Min | CLI E2E Mean | CLI E2E Min | Markdown Size | Assets |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `sample.docx` | No OCR | 88.7 ms | 24.8 ms | 0.251 s | 0.247 s | 0.2 KB | 1 files (7.1 KB) |
+| `sample.pptx` | No OCR | 56.6 ms | 8.7 ms | 0.290 s | 0.287 s | 0.3 KB | 1 files (7.1 KB) |
+| `sample.pdf` | No OCR | 590.3 ms | 12.2 ms | 1.425 s | 1.361 s | 0.1 KB | 1 files (7.1 KB) |
+| `sample.pdf` | OCR (CPU, Cold) | 1239.8 ms | 1025.6 ms | 3.145 s | 3.114 s | 0.2 KB | 1 files (7.1 KB) |
+| `sample.pdf` | OCR (CPU, Warm Engine) | 228.3 ms | 216.1 ms | - | - | 0.2 KB | 1 files (7.1 KB) |
+| `Batch (3 files)` | Directory (No OCR, --jobs 1) | - | - | 1.629 s | 1.624 s | - | - |
+| `Batch (3 files)` | Directory (No OCR, --jobs 2) | - | - | 1.498 s | 1.430 s | - | - |
+| `Batch (3 files)` | Directory (With OCR, --jobs 1) | - | - | 3.245 s | 3.240 s | - | - |
+| `Batch (3 files)` | Directory (With OCR, --jobs 2) | - | - | 3.252 s | 3.238 s | - | - |
+| `sample.pdf (OCR Threads)` | 1 threads | - | - | 3.382 s | 3.334 s | - | - |
+| `sample.pdf (OCR Threads)` | 2 threads | - | - | 3.226 s | 3.149 s | - | - |
+| `sample.pdf (OCR Threads)` | 4 threads | - | - | 3.253 s | 3.242 s | - | - |
+| `sample.pdf (OCR Threads)` | 8 threads | - | - | 3.304 s | 3.226 s | - | - |
+
+## INF2002 Dataset Benchmark
+
+Workload: 19 real-world university slide decks and assignment reports (18 PDFs, 1 DOCX, 579 total PDF pages, 394 unique extracted images, ~28 MB source data in `artifacts/scratch/INF2002/`).
+
+### Directory Batch Conversion (No OCR)
+
+End-to-end CLI execution time across all 19 documents:
+
+| Configuration | Min Time | Mean Time | Throughput |
+| :--- | ---: | ---: | ---: |
+| Directory `--no-ocr --jobs 1` | 14.078 s | 14.220 s | 41.1 pages/s |
+| Directory `--no-ocr --jobs 2` | 14.382 s | 14.421 s | 40.3 pages/s |
+| Directory `--no-ocr --jobs 4` | 14.976 s | 15.269 s | 38.7 pages/s |
+
+### Per-Document Warm Engine Profiling
+
+Detailed in-process timings comparing digital extraction vs warm OpenVINO OCR and image caching across the corpus:
+
+| Document | Pages / Size | Digital (No OCR) | Warm OCR Engine | Unique Images Cached |
+| :--- | ---: | ---: | ---: | ---: |
+| `1.1 - Introduction.pdf` | 59 p (2.8 MB) | 1.768 s | 47.721 s | +71 images |
+| `1.2 - History of HCI.pdf` | 65 p (6.3 MB) | 3.295 s | 70.644 s | +53 images |
+| `1.3 - User Centered Design.pdf` | 19 p (897 KB) | 0.355 s | 9.595 s | +19 images |
+| `2.1 - Needfinding.pdf` | 37 p (1.4 MB) | 0.443 s | 11.000 s | +20 images |
+| `2.2 - Task Analysis.pdf` | 30 p (819 KB) | 0.249 s | 6.246 s | +8 images |
+| `3 - Usability Principles.pdf` | 68 p (3.5 MB) | 1.698 s | 40.701 s | +61 images |
+| `4.1 - Ethics.pdf` | 24 p (1.3 MB) | 0.360 s | 6.803 s | +23 images |
+| `4.2 - Prototyping.pdf` | 56 p (3.0 MB) | 1.030 s | 28.997 s | +31 images |
+| `5 - Evaluation.pdf` | 83 p (2.2 MB) | 1.001 s | 33.021 s | +38 images |
+| `6 - Visual Design.pdf` | 72 p (4.0 MB) | 1.911 s | 62.064 s | +57 images |
+| `L1 - Design Sprint.pdf` | 2 p (54 KB) | 0.016 s | 0.009 s | +0 images |
+| `L2 - Version Control with Git.pdf` | 34 p (943 KB) | 0.340 s | 6.333 s | +13 images |
+| `T0 - As We May Think.pdf` | 3 p (49 KB) | 0.009 s | 0.007 s | +0 images |
+| `T0A - As We May Think.pdf` | 9 p (91 KB) | 0.032 s | 0.031 s | +0 images |
+| `T1 - UCD, Needfinding.pdf` | 2 p (43 KB) | 0.006 s | 0.005 s | +0 images |
+| `T1A - UCD, Needfinding.pdf` | 7 p (75 KB) | 0.024 s | 0.023 s | +0 images |
+| `T2 - Ethics and Prototypes.pdf` | 2 p (32 KB) | 0.005 s | 0.005 s | +0 images |
+| `T2A - Ethics and Prototypes.pdf` | 7 p (80 KB) | 0.026 s | 0.027 s | +0 images |
+| `studio3_individual_evaluation.docx` | 11 KB | 0.259 s | 0.054 s | +0 images |
+
+### Directory Batch Conversion (With Warm OCR)
+
+Full batch directory conversion with OCR enabled across all 579 pages and 417 extracted images:
+
+| Configuration | Total Wall Time | Speedup vs jobs=1 |
+| :--- | ---: | ---: |
+| Directory `With OCR --jobs 1` (historical subprocess) | 387.51 s (6m 27s) | 1.00x |
+| Directory `With OCR --jobs 2` (historical subprocess) | 443.97 s (7m 23s) | 0.87x (CPU core contention) |
+| Directory `With OCR --jobs 4` (historical subprocess) | 330.27 s (5m 30s) | 1.17x (optimal parallel overlap) |
+| Directory `With OCR + Layout --jobs 2` (in-process + verify) | 58.09 s (0m 58s) | 6.67x vs jobs=1 (warm shared worker pool) |
+| Directory `With OCR + Layout --jobs 4` (in-process + verify) | 55.75 s (0m 55s) | 6.95x vs jobs=1 (warm shared worker pool) |
+
+## Comparative Analysis: pdftotext vs docmd
+
+Automated benchmark evaluating `pdftotext` (Poppler 26.10) against `docmd` on the 18 INF2002 PDFs:
+
+| Metric | `pdftotext` (Poppler) | `docmd (--no-ocr)` | `docmd (warm OCR)` |
+| :--- | :--- | :--- | :--- |
+| **Execution Time (18 PDFs, 579 p)** | **1.048 s** | 27.234 s | 330.27 s |
+| **Output Format** | Plain text (form feeds `\x0c`) | GitHub Flavored Markdown | GitHub Flavored Markdown |
+| **Extracted Text Chars** | 156,564 | 31,152,406 (with assets) | 31,180,000+ |
+| **Headings Inferred (`#` / `##`)** | 0 (unsupported) | 987 (font hierarchy) | 987 |
+| **Images / Figures Extracted** | 0 (unsupported) | 417 (in `.assets/`) | 417 (with OCR captions) |
+| **Scanned / UI Slides** | Blank `\x0c\x0c\x0c` | Embedded asset link | Embedded asset + caption |
+| **Running Headers / Footers** | Retained (raw noise) | Stripped (heuristics) | Stripped (heuristics) |
+| **DOCX / PPTX Support** | None (PDF only) | Yes (built-in) | Yes (built-in) |
+| **Output Integrity Gate** | None | `--verify` (tables, links) | `--verify` (tables, links) |
+
 ## Takeaways
 
 - Structurally identical images were OCR'd once after hashing, cutting onnxruntime OCR from 116.2 s to 47.6 s.
@@ -107,3 +195,7 @@ Four threads were fastest in this run. The default is `min(4, cpu_count)` and ca
 - PP-OCRv4 GPU was slower than CPU, but PP-OCRv6 GPU is faster; benchmark the chosen model per host.
 - NPU is present, but PP-OCRv6 still fails NPU compile on driver 1.28.0 and falls back to GPU or CPU.
 - Absolute times are load-sensitive; the loaded-host runs are 3-4x slower than the best runs.
+- Sample fixtures convert in under 60 ms in-process for DOCX/PPTX, and ~228 ms for warm PDF OCR (~1.2 s cold).
+- In batch conversions with OCR, warm worker thread pool with shared `OcrEngine` and `OcrCache` eliminated repeated model recompilations across files.
+- On real-world slide corpora (579 pages, 394 images), `docmd` converts without OCR in 14.1 s (41 pages/s). With OCR, 4 workers achieved 330.27 s across all 394 images.
+- Compared to `pdftotext`: `pdftotext` is ~25x faster for raw text dumps (1.05 s), but drops all 417 images, detects 0 headings, outputs 0 markdown, and cannot parse DOCX or PPTX.

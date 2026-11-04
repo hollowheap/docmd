@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,11 +33,18 @@ PEP723_MARKERS = (
     "dependencies = [",
     "# ///",
 )
-REQUIRED_FRONTMATTER = ("name", "description", "license", "compatibility")
+REQUIRED_FRONTMATTER = (
+    "name",
+    "description",
+    "license",
+    "compatibility",
+    "metadata.version",
+)
 
 
 def frontmatter_fields(text: str) -> dict[str, str]:
     fields: dict[str, str] = {}
+    text = text.replace("\r\n", "\n")
     if not text.startswith("---\n"):
         return fields
     block = text.split("\n---", 1)[0].removeprefix("---\n")
@@ -64,22 +73,70 @@ def build() -> None:
     if not source.startswith(PEP723_SHEBANG) or missing_metadata:
         raise SystemExit(f"{SOURCE.relative_to(ROOT)} is missing PEP 723 metadata")
 
-    fields = frontmatter_fields((SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8"))
+    skill_md = (
+        (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        if (SKILL_ROOT / "SKILL.md").is_file()
+        else ""
+    )
+    fields = frontmatter_fields(skill_md)
     missing_fields = [key for key in REQUIRED_FRONTMATTER if not fields.get(key)]
     if missing_fields:
         raise SystemExit(f"SKILL.md is missing frontmatter: {', '.join(missing_fields)}")
-    if fields["name"] != SKILL_ROOT.name:
+    if fields.get("name") != SKILL_ROOT.name:
         raise SystemExit(
-            f"SKILL.md name {fields['name']!r} does not match {SKILL_ROOT.name!r}"
+            f"SKILL.md name {fields.get('name')!r} does not match {SKILL_ROOT.name!r}"
         )
 
+    pyproject_path = ROOT / "pyproject.toml"
+    if pyproject_path.is_file():
+        pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+        py_deps = set(pyproject.get("project", {}).get("dependencies", []))
+        py_ver = pyproject.get("project", {}).get("version")
+
+        try:
+            lines = source.splitlines()
+            start = lines.index("# /// script")
+            end = lines.index("# ///", start + 1)
+            block = "\n".join(
+                line[2:] if line.startswith("# ") else line[1:]
+                for line in lines[start + 1 : end]
+            )
+            pep723_toml = tomllib.loads(block)
+            docmd_deps = set(pep723_toml.get("dependencies", []))
+        except Exception:
+            pep723_toml = {}
+            docmd_deps = set()
+
+        if py_deps and docmd_deps and py_deps != docmd_deps:
+            diff = py_deps.symmetric_difference(docmd_deps)
+            raise SystemExit(
+                f"Dependency mismatch between pyproject.toml and {SOURCE.name}: {diff}"
+            )
+        if docmd_deps and "opencv-python-headless" not in "".join(docmd_deps):
+            raise SystemExit(f"{SOURCE.name} must require opencv-python-headless")
+
+        ver_match = re.search(r'^VERSION\s*=\s*["\']([^"\']+)["\']', source, re.MULTILINE)
+        docmd_ver = ver_match.group(1) if ver_match else None
+        if py_ver and docmd_ver and docmd_ver != py_ver:
+            raise SystemExit(
+                f"Version mismatch: pyproject.toml ({py_ver}) vs {SOURCE.name} ({docmd_ver})"
+            )
+        if py_ver and fields.get("metadata.version") != py_ver:
+            raise SystemExit(
+                f"Version mismatch: pyproject.toml ({py_ver}) vs SKILL.md ({fields.get('metadata.version')})"
+            )
+
     PACKAGED.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(SOURCE, PACKAGED)
-    PACKAGED.chmod(0o755)
+    temp_target = PACKAGED.with_name(f".{PACKAGED.name}.tmp")
+    shutil.copyfile(SOURCE, temp_target)
+    temp_target.chmod(0o755)
+    temp_target.replace(PACKAGED)
     print(f"Packaged {PACKAGED.relative_to(ROOT)}")
 
 
 def smoke() -> None:
+    if not shutil.which("uv"):
+        raise SystemExit("uv executable not found in PATH")
     if not PACKAGED.is_file():
         raise SystemExit("Packaged script missing; run build first")
 
@@ -98,6 +155,7 @@ def smoke() -> None:
                     "-o",
                     str(output),
                     "--no-ocr",
+                    "--verify",
                 ],
                 capture_output=True,
                 text=True,
@@ -119,3 +177,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

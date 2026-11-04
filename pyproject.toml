@@ -11,6 +11,7 @@ dependencies = [
     "openvino==2026.4.1",
     "opencv-python-headless==5.0.0.93",
     "msoffcrypto-tool==6.0.0",
+    "rapid-layout==1.2.1",
 ]
 
 [dependency-groups]
@@ -18,3 +19,8 @@ dev = ["pytest>=8.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv]
+override-dependencies = [
+    "opencv-python ; sys_platform == 'never'",
+]

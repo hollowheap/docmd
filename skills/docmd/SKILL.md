@@ -1,8 +1,10 @@
 ---
 name: docmd
-description: Convert DOCX, PPTX, and PDF documents into GitHub Flavored Markdown with extracted images, GFM tables, speaker notes, and offline OCR. Use when a document, deck, or paper must become readable Markdown.
+description: Convert DOCX, PPTX, and PDF documents into GitHub Flavored Markdown.
 license: MIT
 compatibility: Requires `uv` to run the bundled PEP 723 script. OCR uses OpenVINO PP-OCRv6 models and needs no system binaries.
+agents: engineer, worker
+disable-model-invocation: true
 metadata:
   version: "0.2.1"
 ---
@@ -66,3 +68,7 @@ uv run --script scripts/docmd <input-path> [-o <out-path>] [--stdout]
 - `references/pdf.md` — PDF layout inference, OCR policy, and a sample.
 
 Each guide ships a runnable sample under `references/fixtures/`.
+
+## Verify
+
+`uv run --script scripts/docmd <input> --verify` exits 0 and reports no broken tables, code fences, or asset links.

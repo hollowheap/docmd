@@ -2,14 +2,14 @@
 
 `docmd` converts DOCX/PPTX/PDF to GitHub Flavored Markdown. `scripts/docmd` is the source of truth; `skills/docmd/` is the publishable skill tree.
 
-## Commands
+## Essential Commands
 
-- Full suite: `uv run pytest -q` (~60s; OCR tests dominate).
+- Full suite: `uv run pytest -q` (~40s; OCR tests dominate).
 - Single check: `uv run pytest tests/test_verify.py::test_asset_links -q`.
 - CLI: `uv run --script scripts/docmd --version`; convert with `uv run --script scripts/docmd <input> --stdout`.
 - Exit codes: `0` success, `1` CLI/runtime failure, `2` corrupt document, `3` encrypted without a valid password.
 - No lint, typecheck, or formatter config; pytest is the verification gate.
-- Task workflow: `~/.config/opencode/skills/implement/scripts/artifacts.sh next-tasks`, then `context <TASK-id>`. Mark `artifacts/plan.md` only after its verify command passes.
+- Task workflow: `~/.config/opencode/skills/implement/scripts/artifacts.sh next-task`. Mark `artifacts/tasks.md` only after its verify command passes.
 
 ## Packaging
 
@@ -29,6 +29,8 @@
 - Converters emit images as `![](data:image/...;base64,...)`. `write_markdown` extracts them into sibling `<stem>.assets/` for file output; `--stdout` keeps data URIs. Follow this seam for new image sources.
 - `--verify` checks fences, GFM table column counts, and local links, including missing or zero-byte assets. File mode verifies after writing assets, so links resolve against the output directory.
 - PDF OCR fallback triggers at fewer than 50 extractable characters. Test PDFs with short digital text will OCR unexpectedly; pass `--no-ocr` or use more than 50 characters.
+- Multi-column reading order: `rapid-layout` PP-Structure ONNX model clusters columns to order layout blocks before emitting markdown.
+- Batch directory conversion uses warm in-process workers (`--jobs N`, default 2) sharing pre-loaded OCR engine and thread-safe caption cache.
 - Directory input mirrors subfolders under `-o`, skips dot-prefixed paths, writes sibling assets, and rejects `--stdout`.
 - In file mode, `-o` is classified by `Path.suffix`; a path containing a dot is treated as a file. Use a non-dotted output directory or an explicit `.md` path. Directory input always treats `-o` as the output root.
 
@@ -41,4 +43,4 @@
 ## References
 
 - `artifacts/requirements.md`, `artifacts/decisions.md`, and `artifacts/specs.md`: settled contracts.
-- `artifacts/plan.md`: active task queue and per-task verify commands.
+- `artifacts/tasks.md`: active task queue and per-task verify commands.
