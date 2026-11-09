@@ -339,3 +339,41 @@
   - Seam: Repository LICENSE and skill README
   - Behavior: Ships an MIT LICENSE and a README describing install, usage, and exit codes.
   - Failures: Missing documentation fails layout tests.
+
+### Corrective Pass
+
+- [x] S51 [R04] [D19]: OCR merges against digital PDF text: matching OCR lines are dropped, unmatched OCR lines fill gaps, digital font sizes win, and OCR lines never become headings.
+  - Verify: `uv run pytest tests/test_review_fixes.py::test_ocr_merges_against_digital_text -q`
+  - Seam: `extract_pdf_lines`, `ocr_pdf_page`, and `convert_pdf`
+  - Behavior: Keeps the digital page skeleton and admits only OCR lines with no digital match.
+  - Failures: Digital wording and heading sizes stay stable; OCR-only text still appears.
+
+- [x] S52 [R02] [D20]: PDF conversion loads `rapid-layout` once, orders blocks before lines, falls back to geometric ordering with a log line, and recovers paragraph gaps, bullet lists, aligned text tables, dehyphenation, and link annotations.
+  - Verify: `uv run pytest tests/test_review_fixes.py::test_pdf_table_and_paragraph_recovery tests/test_review_fixes.py::test_pdf_layout_function_is_wired -q`
+  - Seam: `extract_pdf_lines`, `detect_pdf_tables`, `convert_pdf`, and `layout_blocks_for_page`
+  - Behavior: Emits structure instead of one prose paragraph per page and keeps tables and links.
+  - Failures: Layout failure falls back and logs; a table becomes GFM rows; annotated lines become Markdown links.
+
+- [x] S53 [R08] [D21]: `--verify` covers single-column and quoted tables, reference definitions, and HTML image sources, and reports counts for fences, tables, links, and images.
+  - Verify: `uv run pytest tests/test_review_fixes.py::test_verify_covers_quoted_single_column_reference_and_html -q`
+  - Seam: `verify_markdown`, `verify_markdown_counts`, and `report_verify_errors`
+  - Behavior: Checks the four previously missed cases and logs coverage.
+  - Failures: Missing assets and malformed tables return exit `1`.
+
+- [x] S54 [R05] [D22]: Directory conversion stages each document and commits in sorted document order, publishing only outputs before the first failing document.
+  - Verify: `uv run pytest tests/test_review_fixes.py::test_batch_reports_earliest_failure_in_sorted_order -q`
+  - Seam: `convert_directory`, `staged_path`, and `commit_staged_output`
+  - Behavior: Returns the earliest failure in sorted order on every run and removes later staged outputs.
+  - Failures: Later documents are not published after a failure.
+
+- [x] S55 [R01] [D23]: Typography normalisation runs on prose only, preserves code and link destinations, and `--no-sanitize` disables it.
+  - Verify: `uv run pytest tests/test_review_fixes.py::test_normalize_typography_preserves_meaning -q`
+  - Seam: `normalize_typography` and `ConversionOptions.sanitize`
+  - Behavior: Smart quotes and dashes change; `H₂O`, `x²`, `a·b`, `×`, arrows, code, and URLs survive.
+  - Failures: The opt-out returns input typography unchanged.
+
+- [x] S56 [R07] [D24]: Byte, page, and image-pixel budgets exit `1` and name the exceeded budget; a conversion with no text or images exits `2`.
+  - Verify: `uv run pytest tests/test_review_fixes.py::test_empty_pdf_is_corrupt_and_budgets_are_enforced -q`
+  - Seam: `ConversionOptions`, `convert_source`, and `convert_pdf`
+  - Behavior: Enforces `DOCMD_MAX_BYTES`, `DOCMD_MAX_PAGES`, and `DOCMD_MAX_IMAGE_PIXELS`; empty output is corrupt.
+  - Failures: Budget or empty-content failures return the documented nonzero codes.

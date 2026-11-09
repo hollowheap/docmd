@@ -101,3 +101,35 @@
   - Context: Multi-column documents and dense screenshot images interleave text when sorted naively by coordinate; autoregressive VLMs (Surya/Qwen) were evaluated and rejected for high latency (50-80s), GPU dependency, and repetition loops.
   - Alternatives: Autoregressive VLM (rejected for 100x latency and hallucination loops); heuristic-only sorting (rejected for collapsing across full-width banners).
   - Consequences: Lightweight PP-Structure model (~6.6 MB ONNX) runs offline in <0.4s on CPU with zero API keys; headless OpenCV enforced via `[tool.uv.override-dependencies]`.
+
+### Corrective Pass (2026-11-09)
+
+- [x] D19 [R04]: Digital PDF text is the ground truth; OCR fills gaps and never replaces a page's digital lines
+  - Context: OCR replacement changed trustworthy page numbers, headers, and heading sizes on pages with a text layer.
+  - Alternatives: OCR-first pages (rejected for backend-sensitive output); OCR-only on scanned pages (kept as the no-digital-text case).
+  - Consequences: OCR lines matching digital lines are dropped, margin stripping runs after the merge, and OCR fragments never become headings.
+
+- [x] D20 [R02]: PDF structure recovery uses layout blocks with a logged geometric fallback, then paragraph gaps, lists, aligned text tables, dehyphenation, and link annotations
+  - Context: `rapid-layout` was only used for image captions, so PDF pages flattened to one prose paragraph per page.
+  - Alternatives: Layout-only ordering (rejected when the model is unavailable); geometric-only ordering (rejected for multi-column pages).
+  - Consequences: The layout engine loads once per PDF; failures log a fallback line instead of failing the conversion.
+
+- [x] D21 [R08]: `--verify` checks single- and multi-column tables, quoted tables, inline and reference links, and HTML image sources, and reports its counts
+  - Context: The previous checker missed single-column tables, reference definitions, HTML images, and tables inside blockquotes.
+  - Alternatives: Narrowing the documented claim (rejected because verification is the downstream gate).
+  - Consequences: Passing runs log the number of fences, tables, links, and images checked.
+
+- [x] D22 [R05]: Directory conversion stages every document, then commits staged outputs in sorted document order and stops at the first failure
+  - Context: `as_completed` returned whichever failure finished first and running workers kept publishing after the batch failed.
+  - Alternatives: Killing running workers (rejected; in-process workers cannot be terminated safely); restoring subprocess isolation (rejected for OCR cache and startup cost).
+  - Consequences: Batch exit codes are deterministic and only documents before the first failing document are published.
+
+- [x] D23 [R01]: Typography normalisation applies only to prose, is named honestly, and can be disabled with `--no-sanitize`
+  - Context: The old ASCII pass rewrote chemical formulae, superscripts, arrows, multiplication signs, URLs, and code.
+  - Alternatives: Keeping the lossy default (rejected); normalising code and destinations (rejected).
+  - Consequences: Smart quotes, dashes, ellipses, and invisible spaces are normalised in prose; code spans, fences, link destinations, and mathematical symbols survive.
+
+- [x] D24 [R07]: Resource budgets and empty-conversion handling are explicit runtime contracts
+  - Context: Untrusted documents could exhaust memory, and a PDF with no text or images exited successfully with empty Markdown.
+  - Alternatives: No limits (rejected for agent-facing conversion); a new exit code for empty output (rejected to preserve the four-value contract).
+  - Consequences: Byte, page, and image-pixel budgets exit `1` and name the budget; empty content exits `2` as a corrupt document.

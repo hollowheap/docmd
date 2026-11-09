@@ -7,9 +7,15 @@ slide order and speaker notes.
 
 - Each slide becomes `## Slide <N>: <title>`.
 - Slides are separated with `---`.
-- Shape text preserves paragraph order.
-- Native PowerPoint tables become GFM tables.
-- Speaker notes become `> **Speaker Notes:** <content>`.
+- Shapes are read in visual order: vertical bands, then left to right.
+- Text frames preserve bullet paragraphs, indentation levels, and run-level
+  bold, italic, and monospace.
+- Native PowerPoint tables become GFM tables; charts become a small category
+  and series table, and SmartArt contributes its text nodes.
+- Unreadable shape classes emit an HTML comment naming the shape and slide
+  instead of disappearing silently.
+- Speaker notes become `> **Speaker Notes:** <content>` with every note line
+  kept inside the blockquote.
 - Slide images are extracted to a sibling `.assets` directory or inlined as
   Base64 data URIs with `--stdout`.
 

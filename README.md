@@ -6,15 +6,15 @@ Convert DOCX, PPTX, and PDF documents into GitHub Flavored Markdown.
 
 ## Features
 
-- DOCX headings, lists, tables, images, and inline text.
-- PPTX slides, tables, speaker notes, and pictures.
-- PDF layout inference: font-size headings, multi-column reading order, running header/footer removal, and image captions.
-- Offline OCR for scanned pages and text inside embedded images.
+- DOCX headings, run-level bold/italic/code, hyperlinks, lists, tables, images, table-cell images, and footnotes/endnotes.
+- PPTX slides in visual order, bullets, tables, charts, SmartArt text, speaker notes, and pictures.
+- PDF layout blocks with geometric fallback: font-size headings, multi-column reading order, paragraph gaps, lists, text tables, link annotations, running header/footer removal, and image captions.
+- Offline OCR for scanned pages and text inside embedded images, merged against digital text rather than replacing it.
 - GitHub Flavored Markdown tables with merged-cell flattening and strict column alignment.
-- File mode writes `<name>.md` plus a sibling `<name>.assets/` directory.
+- File mode writes `<name>.md` plus a sibling `<name>.assets/` directory; reconversion replaces generated assets and keeps unrelated files.
 - `--stdout` keeps images inline as Base64 data URIs.
-- `--verify` checks table columns, code fences, and local asset links.
-- Deterministic directory conversion with `--jobs N`.
+- `--verify` checks single- and multi-column tables, code fences, inline and reference asset links, HTML image sources, and quoted tables.
+- Deterministic directory conversion with `--jobs N`; a failed batch publishes only documents before the first failing document in sorted order.
 
 ## Requirements
 
@@ -56,7 +56,7 @@ Run `uv run --script scripts/docmd --version` to check the installed version.
 ## CLI
 
 ```text
-docmd INPUT [-o PATH] [--stdout] [--no-images] [--no-ocr]
+docmd INPUT [-o PATH] [--stdout] [--no-images] [--no-ocr] [--no-sanitize]
       [--password SECRET] [--verify] [-j N] [-q] [-v] [-h]
 ```
 
@@ -66,7 +66,8 @@ docmd INPUT [-o PATH] [--stdout] [--no-images] [--no-ocr]
 | `--stdout` | Write Markdown to stdout and inline images as data URIs. Directory input is rejected. |
 | `--no-images` | Omit image extraction and image Markdown. |
 | `--no-ocr` | Disable page OCR and image captions. |
-| `--password SECRET` | Password for encrypted documents. |
+| `--no-sanitize` | Disable typography normalisation. |
+| `--password SECRET` | Password for encrypted documents. Prefer `DOCMD_PASSWORD`; this option exposes the secret in the process list. |
 | `--verify` | Validate generated Markdown before finishing. |
 | `-j, --jobs N` | Concurrent documents for directory input. Default: `2`. |
 | `-q, --quiet` | Suppress progress logs. |
@@ -84,7 +85,7 @@ docmd INPUT [-o PATH] [--stdout] [--no-images] [--no-ocr]
 
 ## OCR
 
-OCR uses [RapidOCR](https://github.com/RapidAI/RapidOCR) PP-OCRv6 models through OpenVINO. The default model is `tiny` and the default device order is `auto`: NPU, then GPU, then CPU.
+OCR uses [RapidOCR](https://github.com/RapidAI/RapidOCR) PP-OCRv6 models through OpenVINO. The default model is `tiny` and the default device order is `auto`: NPU, then GPU, then CPU. The compiled device is logged at info level. Invalid `DOCMD_OCR_DEVICE`, `DOCMD_OCR_MODEL`, or `DOCMD_OCR_CONFIDENCE` values abort with exit `1` and name the accepted values.
 
 ```bash
 # Force a backend: cpu, gpu, npu, or auto
@@ -97,9 +98,11 @@ DOCMD_OCR_MODEL=small uv run --script scripts/docmd scan.pdf --stdout
 DOCMD_OCR_THREADS=4 uv run --script scripts/docmd scan.pdf --stdout
 ```
 
-`DOCMD_OCR_DEVICE=auto` tries NPU, then GPU, then CPU. Set `DOCMD_OCR_DEVICE=cpu` to force CPU. OCR results for identical images are cached for the duration of a conversion.
+`DOCMD_OCR_DEVICE=auto` tries NPU, then GPU, then CPU. Set `DOCMD_OCR_DEVICE=cpu` to force CPU. OCR results for identical images are cached for the duration of a conversion. `DOCMD_OCR_CONFIDENCE` sets the minimum score (default `0.5`); blocks of two characters or fewer are dropped unless they match digital text.
 
-PDF pages with fewer than 50 extractable characters trigger OCR fallback. Image text is emitted as `> *[Image Text]*: ...` beneath the image.
+PDF pages with fewer than 50 extractable characters, or with a dominant image covering more than 60 percent of the page, trigger OCR. OCR lines that match digital text are discarded, so digital wording wins. Image text is emitted as `> *[Image Text]*: ...` beneath the image and suppressed when it duplicates the page body.
+
+Resource budgets default to 100 MiB per file, 2,000 PDF pages, and 100 megapixels per rendered image. Override them with `DOCMD_MAX_BYTES`, `DOCMD_MAX_PAGES`, and `DOCMD_MAX_IMAGE_PIXELS`; exceeding a budget exits `1` and names it.
 
 ## Output
 
@@ -130,9 +133,12 @@ uv run pytest tests/test_verify.py::test_asset_links -q
 
 # Rebuild the packaged skill and smoke-convert fixtures
 uv run python scripts/dist.py
+
+# Measure a local corpus without committing it
+DOCMD_BENCH_DIR="/path/to/corpus" uv run python artifacts/scripts/bench_metrics.py
 ```
 
-`scripts/docmd` is the source of truth. `scripts/dist.py` syncs it into `skills/docmd/scripts/docmd`, validates the SKILL.md frontmatter and PEP 723 metadata, and smoke-converts each fixture.
+`scripts/docmd` is the source of truth. `scripts/dist.py` syncs it into `skills/docmd/scripts/docmd`, validates the SKILL.md frontmatter and PEP 723 metadata, and smoke-converts each fixture, including one OCR-enabled PDF conversion.
 
 Keep PEP 723 dependencies in `scripts/docmd` in sync with `pyproject.toml`, then run `uv lock`. Keep `opencv-python-headless` in both manifests; RapidOCR imports fail without it.
 

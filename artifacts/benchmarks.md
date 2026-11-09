@@ -199,3 +199,55 @@ Automated benchmark evaluating `pdftotext` (Poppler 26.10) against `docmd` on th
 - In batch conversions with OCR, warm worker thread pool with shared `OcrEngine` and `OcrCache` eliminated repeated model recompilations across files.
 - On real-world slide corpora (579 pages, 394 images), `docmd` converts without OCR in 14.1 s (41 pages/s). With OCR, 4 workers achieved 330.27 s across all 394 images.
 - Compared to `pdftotext`: `pdftotext` is ~25x faster for raw text dumps (1.05 s), but drops all 417 images, detects 0 headings, outputs 0 markdown, and cannot parse DOCX or PPTX.
+
+## Corrective Pass: INF2002 1.1 (2026-11-09)
+
+File-mode conversion of `1.1 - Introduction.pdf` (59 pages), measured after the
+OCR merge, deduplication, layout, table, and link work. The baseline is the
+reviewed `7f819b1` output from the addendum.
+
+| Metric | Baseline docmd 7f819b1 | Corrective OCR | Corrective `--no-ocr` |
+| :--- | ---: | ---: | ---: |
+| Words | 5,466 | 3,738 | 1,723 |
+| Unique words | 1,382 | 1,325 | 668 |
+| Heading lines | 162 | 77 | 76 |
+| Heading words | 871 | 286 | 281 |
+| Table rows | 0 | 60 | 29 |
+| Markdown links | 0 | 19 | 24 |
+| Image files | 74 | 74 | 74 |
+| Characters | 35,538 | 26,093 | 13,362 |
+
+The word and character drop is expected: OCR lines matching digital text and
+image captions matching the page body are now suppressed, and the previous
+output emitted the Singapore Airlines fare text three times. Unique words are
+within 4 percent of the baseline. Headings fall inside the 40-80 target and
+links rise from 0 to 19 in OCR mode. Table rows rise from 0 to 60, above the
+addendum's target of 40; the two OCR-schedule tables account for the increase.
+The `--no-ocr` table count is 29 because those screenshots are not readable
+without OCR. Run the local harness with
+`uv run python artifacts/scripts/bench_metrics.py` after setting
+`DOCMD_BENCH_DIR`.
+
+### Full INF2002 Corpus
+
+A full local run against `$HOME/Drive/gdrive/SIT/INF2002` on 2026-11-09 used
+the harness with OCR enabled and the default CPU/tiny OCR configuration. The
+corpus is course material and is not committed.
+
+| Metric | Total |
+| :--- | ---: |
+| Documents converted | 36 |
+| Words | 67,172 |
+| Heading lines | 1,394 |
+| Table rows | 517 |
+| Markdown links | 118 |
+| Images | 662 |
+| OCR image-text blocks | 229 |
+| Characters | 449,589 |
+| Serial in-process time | 688.06 s |
+
+The corpus contains one zero-byte `.docx` (`INF2002 STUDIO 3 - Synthesized
+Final Report.docx`) which exits `2` and is skipped by the harness. An `.xlsx`
+and a `.zip` are outside the supported extensions. The slowest documents were
+`1.2 - History of HCI.pdf` (78.3 s), `6 - Visual Design.pdf` (76.4 s), and
+`1.1 - Introduction.pdf` (64.0 s), all with OCR and layout enabled.

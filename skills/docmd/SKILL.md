@@ -33,16 +33,19 @@ Paths are relative to this skill directory.
 
 ```bash
 uv run --script scripts/docmd <input-path> [-o <out-path>] [--stdout]
-      [--no-images] [--no-ocr] [--password <secret>] [--verify] [-j <n>]
-      [-q] [-v] [-h]
+      [--no-images] [--no-ocr] [--no-sanitize] [--password <secret>]
+      [--verify] [-j <n>] [-q] [-v] [-h]
 ```
 
 - `--stdout` writes Markdown to standard output and inlines images as data URIs.
 - File mode writes `<name>.md` next to a sibling `<name>.assets/` directory.
-- Output normalizes smart quotes, dashes, ellipses, and invisible spaces to ASCII.
+- Output normalizes smart quotes, dashes, ellipses, and invisible spaces; code
+  and link destinations are preserved. `--no-sanitize` disables this pass.
 - `--jobs N` converts up to N documents concurrently for directory input
-  (default: 2).
-- `--verify` checks GFM table columns, code fences, and local asset links.
+  (default: 2). A failed batch stops at the first failure in sorted order.
+- `--verify` checks GFM table columns, code fences, and inline, reference, and
+  HTML asset links.
+- Prefer `DOCMD_PASSWORD` over `--password`, which exposes the secret in argv.
 - Exit codes: `0` success, `1` CLI or runtime failure, `2` corrupt document,
   `3` encrypted document without a valid password.
 
@@ -53,6 +56,8 @@ uv run --script scripts/docmd <input-path> [-o <out-path>] [--stdout]
 - `DOCMD_OCR_MODEL=tiny|small` selects the PP-OCRv6 model. Default: `tiny`.
 - `DOCMD_OCR_THREADS=N` limits OpenVINO CPU inference threads. Default:
   `min(4, cpu_count)`.
+- `DOCMD_OCR_CONFIDENCE=0.0..1.0` sets the OCR score gate. Default: `0.5`.
+  Invalid OCR environment values abort with exit `1`.
 
 ## Consuming output
 

@@ -340,3 +340,33 @@
   - Files: `LICENSE`, `skills/docmd/README.md`, `tests/test_skill_layout.py`
   - Notes: The repository ships an MIT LICENSE and a skill README with install, usage, and exit codes.
   - Risk: Low
+- [x] T63 [S51] (blocked-by: none): PDF OCR merges against digital text instead of replacing it, and OCR lines never become headings.
+  - Verify: `uv run pytest tests/test_review_fixes.py::test_ocr_merges_against_digital_text -q`
+  - Files: `scripts/docmd`, `tests/test_review_fixes.py`, `tests/conftest.py`
+  - Notes: Digital text and its font size win; OCR fills only unmatched gaps.
+  - Risk: High
+- [x] T64 [S52] (blocked-by: T63): PDF layout blocks, paragraph gaps, lists, text tables, dehyphenation, and link annotations produce structured Markdown.
+  - Verify: `uv run pytest tests/test_review_fixes.py::test_pdf_table_and_paragraph_recovery tests/test_review_fixes.py::test_pdf_layout_function_is_wired -q`
+  - Files: `scripts/docmd`, `tests/test_review_fixes.py`
+  - Notes: `rapid-layout` is wired into the PDF path with a logged geometric fallback.
+  - Risk: High
+- [x] T65 [S53] (blocked-by: none): `--verify` covers single-column and quoted tables, reference links, and HTML image sources, and reports counts.
+  - Verify: `uv run pytest tests/test_review_fixes.py::test_verify_covers_quoted_single_column_reference_and_html -q`
+  - Files: `scripts/docmd`, `tests/test_review_fixes.py`
+  - Notes: Verification now reads the Markdown it claims to check.
+  - Risk: Medium
+- [x] T66 [S54] (blocked-by: none): Directory conversion stages results and commits in sorted order, returning the first failure deterministically.
+  - Verify: `uv run pytest tests/test_review_fixes.py::test_batch_reports_earliest_failure_in_sorted_order -q`
+  - Files: `scripts/docmd`, `tests/test_review_fixes.py`
+  - Notes: Later documents are never published after a failure.
+  - Risk: High
+- [x] T67 [S55] (blocked-by: none): Typography normalisation is prose-only, preserves meaning, and supports `--no-sanitize`.
+  - Verify: `uv run pytest tests/test_review_fixes.py::test_normalize_typography_preserves_meaning -q`
+  - Files: `scripts/docmd`, `tests/test_review_fixes.py`
+  - Notes: Code, URLs, sub/superscripts, arrows, and mathematical signs survive.
+  - Risk: Medium
+- [x] T68 [S56] (blocked-by: none): Resource budgets and empty-conversion handling use the documented exit codes.
+  - Verify: `uv run pytest tests/test_review_fixes.py::test_empty_pdf_is_corrupt_and_budgets_are_enforced -q`
+  - Files: `scripts/docmd`, `tests/test_review_fixes.py`
+  - Notes: Byte, page, and image-pixel budgets exit 1; empty content exits 2.
+  - Risk: Medium
