@@ -92,11 +92,11 @@ def test_numbered_list_markers(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "- First bullet" in result.stdout
     assert "1. First number" in result.stdout
-    assert "1. Second number" in result.stdout
+    assert "2. Second number" in result.stdout
     assert (
         result.stdout.index("- First bullet")
         < result.stdout.index("1. First number")
-        < result.stdout.index("1. Second number")
+        < result.stdout.index("2. Second number")
     )
 
 

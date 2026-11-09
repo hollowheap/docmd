@@ -27,8 +27,8 @@ import math
 import os
 import re
 import shutil
-import subprocess
 import sys
+import tempfile
 import threading
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -60,11 +60,20 @@ TABLE_ERROR = "table row column count does not match header"
 LINK_RE = re.compile(
     r"!?\[[^\]]*\]\(\s*(?:<([^>]+)>|((?:[^()]|\([^()]*\))+?))(?:\s+[\"'][^)]*[\"'])?\s*\)"
 )
-ASCII_TRANSLATION = str.maketrans(
+REFERENCE_DEF_RE = re.compile(r"^\s{0,3}\[([^\]]+)\]:\s*(\S.*)$")
+HTML_IMAGE_RE = re.compile(
+    r"<img\b[^>]*\bsrc\s*=\s*(?:\"([^\"]+)\"|'([^']+)'|([^\s>]+))",
+    re.IGNORECASE,
+)
+LIST_ITEM_RE = re.compile(
+    r"^\s*[\u00b7\u2022\u25aa\u25ab\u25e6\u25cf\u25cb\u25a0\u25a1\u2013\u2014\u2043\-]\s+"
+)
+INLINE_PROTECT_RE = re.compile(
+    r"(`+[^`]*?`+|!?\[[^\]]*\]\([^)]*\)|<[^>]+>|(?:https?://|www\.)\S+)"
+)
+TYPOGRAPHY_TRANSLATION = str.maketrans(
     {
         0x00A0: " ",
-        0x00B7: "-",
-        0x00D7: "x",
         0x2007: " ",
         0x200B: "",
         0x200C: "",
@@ -83,29 +92,28 @@ ASCII_TRANSLATION = str.maketrans(
         0x201D: '"',
         0x201E: '"',
         0x201F: '"',
-        0x2022: "-",
-        0x2023: "-",
         0x2026: "...",
         0x202F: " ",
-        0x2043: "-",
         0x205F: " ",
         0x2060: "",
-        0x2190: "<-",
-        0x2192: "->",
-        0x2194: "<->",
-        0x21D2: "=>",
-        0x2212: "-",
-        0x2260: "!=",
-        0x2264: "<=",
-        0x2265: ">=",
-        0x25AA: "-",
-        0x25AB: "-",
-        0x25E6: "-",
         0x3000: " ",
         0xFEFF: "",
         0xFFFD: "",
     }
 )
+# Retained for callers that used the old name; this is typography normalisation.
+ASCII_TRANSLATION = TYPOGRAPHY_TRANSLATION
+
+_QUIET = False
+
+
+def log_info(message: str) -> None:
+    if not _QUIET:
+        print(f"docmd: {message}", file=sys.stderr)
+
+
+def log_warning(message: str) -> None:
+    print(f"docmd: warning: {message}", file=sys.stderr)
 
 
 class CorruptDocumentError(Exception):
@@ -114,6 +122,14 @@ class CorruptDocumentError(Exception):
 
 class EncryptedDocumentError(Exception):
     """The input is encrypted and no valid password was supplied."""
+
+
+class OcrError(RuntimeError):
+    """The OCR backend could not be loaded or configured."""
+
+
+class BudgetError(RuntimeError):
+    """A configured resource budget was exceeded."""
 
 
 class ConversionOptions:
@@ -126,6 +142,10 @@ class ConversionOptions:
         quiet: bool = False,
         stdout: bool = False,
         jobs: int = 1,
+        sanitize: bool = True,
+        max_bytes: int | None = None,
+        max_pages: int | None = None,
+        max_image_pixels: int | None = None,
     ) -> None:
         if jobs < 1:
             raise ValueError("jobs must be at least 1")
@@ -136,6 +156,18 @@ class ConversionOptions:
         self.quiet = quiet
         self.stdout = stdout
         self.jobs = jobs
+        self.sanitize = sanitize
+        self.max_bytes = max_bytes if max_bytes is not None else _env_budget(
+            "DOCMD_MAX_BYTES", 100 * 1024 * 1024
+        )
+        self.max_pages = max_pages if max_pages is not None else _env_budget(
+            "DOCMD_MAX_PAGES", 2_000
+        )
+        self.max_image_pixels = (
+            max_image_pixels
+            if max_image_pixels is not None
+            else _env_budget("DOCMD_MAX_IMAGE_PIXELS", 100_000_000)
+        )
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> "ConversionOptions":
@@ -148,18 +180,38 @@ class ConversionOptions:
             quiet=args.quiet,
             stdout=args.stdout,
             jobs=max(1, args.jobs),
+            sanitize=not args.no_sanitize,
         )
 
 
+def _env_budget(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"invalid {name} {raw!r}: expected a positive integer") from exc
+    if value <= 0:
+        raise ValueError(f"invalid {name} {raw!r}: expected a positive integer")
+    return value
+
+
 class OcrConfig:
+    VALID_DEVICES = ("auto", "cpu", "gpu", "npu")
+    VALID_MODELS = ("tiny", "small")
+
     def __init__(
         self,
         device: str = "auto",
         model: str = "tiny",
         threads: int | None = None,
+        confidence: float | None = None,
     ) -> None:
         self.device = device
         self.model = model
+        self.confidence = 0.5 if confidence is None else confidence
+        self.compiled_device = ""
         self.threads = (
             min(4, os.cpu_count() or 1)
             if threads is None or threads <= 0
@@ -170,14 +222,44 @@ class OcrConfig:
     def from_env(cls) -> "OcrConfig":
         device = os.environ.get("DOCMD_OCR_DEVICE", "auto").strip().lower()
         model = os.environ.get("DOCMD_OCR_MODEL", "tiny").strip().lower()
+        if device not in cls.VALID_DEVICES:
+            raise ValueError(
+                f"invalid DOCMD_OCR_DEVICE {device!r}; "
+                f"accepted values: {', '.join(cls.VALID_DEVICES)}"
+            )
+        if model not in cls.VALID_MODELS:
+            raise ValueError(
+                f"invalid DOCMD_OCR_MODEL {model!r}; "
+                f"accepted values: {', '.join(cls.VALID_MODELS)}"
+            )
         env_threads = os.environ.get("DOCMD_OCR_THREADS")
         threads = None
-        if env_threads is not None:
+        if env_threads is not None and env_threads.strip():
             try:
-                threads = int(env_threads or 0)
-            except ValueError:
-                threads = None
-        return cls(device=device, model=model, threads=threads)
+                threads = int(env_threads)
+            except ValueError as exc:
+                raise ValueError(
+                    f"invalid DOCMD_OCR_THREADS {env_threads!r}: expected an integer"
+                ) from exc
+        env_confidence = os.environ.get("DOCMD_OCR_CONFIDENCE")
+        confidence = None
+        if env_confidence is not None and env_confidence.strip():
+            try:
+                confidence = float(env_confidence)
+            except ValueError as exc:
+                raise ValueError(
+                    f"invalid DOCMD_OCR_CONFIDENCE {env_confidence!r}: expected a number"
+                ) from exc
+            if not 0.0 <= confidence <= 1.0:
+                raise ValueError(
+                    f"invalid DOCMD_OCR_CONFIDENCE {env_confidence!r}: expected 0.0 to 1.0"
+                )
+        return cls(
+            device=device,
+            model=model,
+            threads=threads,
+            confidence=confidence,
+        )
 
     def device_candidates(self) -> tuple[str, ...]:
         if self.device == "cpu":
@@ -240,10 +322,20 @@ def split_table_row(line: str) -> list[str]:
 
 
 def is_table_delimiter(line: str) -> bool:
+    if "|" not in line:
+        return False
     cells = split_table_row(line)
-    return len(cells) > 1 and all(
+    return bool(cells) and all(
         TABLE_DELIMITER_CELL_RE.fullmatch(cell) for cell in cells
     )
+
+
+def unquote_markdown_line(line: str) -> str:
+    """Strip blockquote markers so quoted tables are checked like top-level ones."""
+    stripped = line.lstrip()
+    while stripped.startswith(">"):
+        stripped = stripped[1:].lstrip()
+    return stripped
 
 
 def fence_info(line: str) -> tuple[str, int, str] | None:
@@ -265,8 +357,11 @@ def fence_marker(line: str) -> str | None:
     return (info[0] * info[1]) if info is not None else None
 
 
-def verify_markdown(markdown: str, base_dir: Path | None = None) -> list[str]:
+def verify_markdown_counts(
+    markdown: str, base_dir: Path | None = None
+) -> tuple[list[str], dict[str, int]]:
     errors: list[str] = []
+    counts = {"fences": 0, "tables": 0, "links": 0, "images": 0}
     fence_state: tuple[str, int] | None = None
     lines = markdown.splitlines()
     index = 0
@@ -276,21 +371,24 @@ def verify_markdown(markdown: str, base_dir: Path | None = None) -> list[str]:
         if info is not None:
             if fence_state is None:
                 fence_state = (info[0], info[1])
+                counts["fences"] += 1
             elif fence_state[0] == info[0] and info[1] >= fence_state[1] and not info[2]:
                 fence_state = None
             index += 1
             continue
         if fence_state is None and index + 1 < len(lines):
-            if "|" in line and is_table_delimiter(lines[index + 1]):
-                header_count = len(split_table_row(line))
-                mismatch = len(split_table_row(lines[index + 1])) != header_count
+            header = unquote_markdown_line(line)
+            delimiter = unquote_markdown_line(lines[index + 1])
+            if "|" in header and is_table_delimiter(delimiter):
+                header_count = len(split_table_row(header))
+                mismatch = len(split_table_row(delimiter)) != header_count
+                counts["tables"] += 1
                 index += 2
-                while (
-                    index < len(lines)
-                    and lines[index].strip()
-                    and "|" in lines[index]
-                ):
-                    if len(split_table_row(lines[index])) != header_count:
+                while index < len(lines):
+                    row = unquote_markdown_line(lines[index])
+                    if not row.strip() or "|" not in row:
+                        break
+                    if len(split_table_row(row)) != header_count:
                         mismatch = True
                     index += 1
                 if mismatch:
@@ -314,27 +412,62 @@ def verify_markdown(markdown: str, base_dir: Path | None = None) -> list[str]:
             asset_lines.append(line)
 
     base = (Path.cwd() if base_dir is None else Path(base_dir)).resolve()
-    for match in LINK_RE.finditer("\n".join(asset_lines)):
-        target = (match.group(1) or match.group(2) or "").strip()
+
+    def check_target(target: str) -> None:
+        target = target.strip()
         if not target or target.startswith("#"):
-            continue
+            return
         lowered = target.lower()
         if lowered.startswith(
             ("http://", "https://", "mailto:", "data:", "file:", "//")
         ):
-            continue
+            return
         link = target.split("#", 1)[0].split("?", 1)[0]
         if not link:
-            continue
+            return
         resolved = (base / unquote(link)).resolve()
         if not resolved.is_relative_to(base):
             errors.append(f"missing asset: {target}")
-            continue
+            return
         if not resolved.is_file():
             errors.append(f"missing asset: {target}")
         elif resolved.stat().st_size == 0:
             errors.append(f"zero-byte asset: {target}")
-    return errors
+
+    for line in asset_lines:
+        match = LINK_RE.search(line)
+        while match is not None:
+            target = (match.group(1) or match.group(2) or "").strip()
+            if match.group(0).lstrip().startswith("!"):
+                counts["images"] += 1
+            else:
+                counts["links"] += 1
+            check_target(target)
+            match = LINK_RE.search(line, match.end())
+
+    for match in HTML_IMAGE_RE.finditer("\n".join(asset_lines)):
+        target = (match.group(1) or match.group(2) or match.group(3) or "").strip()
+        counts["images"] += 1
+        check_target(target)
+
+    for line in asset_lines:
+        stripped = unquote_markdown_line(line)
+        match = REFERENCE_DEF_RE.match(stripped)
+        if match is None:
+            continue
+        target = match.group(2).strip()
+        if target.startswith("<") and ">" in target:
+            target = target[1 : target.index(">")]
+        else:
+            target = target.split()[0] if target.split() else ""
+        counts["links"] += 1
+        check_target(target)
+
+    return errors, counts
+
+
+def verify_markdown(markdown: str, base_dir: Path | None = None) -> list[str]:
+    return verify_markdown_counts(markdown, base_dir)[0]
 
 
 def _accelerator_compile(
@@ -345,14 +478,22 @@ def _accelerator_compile(
     disabled: dict[str, bool],
     compile_config: dict | None = None,
 ):
-    available = getattr(core, "available_devices", [])
-    for device in config.device_candidates():
+    candidates = config.device_candidates()
+    if not candidates:
+        return None
+    try:
+        available = getattr(core, "available_devices", [])
+    except Exception:
+        available = []
+    for device in candidates:
         if disabled.get(device) or device not in available:
             continue
         try:
-            return compile_model(
+            compiled = compile_model(
                 core, model, device_name=device, config=compile_config
             )
+            config.compiled_device = device
+            return compiled
         except Exception:
             disabled[device] = True
     return None
@@ -376,6 +517,7 @@ def _build_ocr_engine(config: OcrConfig):
         )
         if compiled is not None:
             return compiled
+        config.compiled_device = "CPU"
         return original_compile(
             self, model, device_name="CPU", config=compile_config
         )
@@ -412,12 +554,33 @@ class OcrEngine:
         self._engine = None
         self._layout_engine = None
         self._lock = threading.Lock()
+        self.dropped_blocks = 0
+
+    def ensure_loaded(self) -> None:
+        with self._lock:
+            if self._engine is None:
+                self._engine = _build_ocr_engine(self.config)
+                log_info(
+                    "ocr: compiled on "
+                    f"{self.config.compiled_device or 'CPU'} "
+                    f"({self.config.model} model)"
+                )
 
     def __call__(self, data):
         with self._lock:
             if self._engine is None:
                 self._engine = _build_ocr_engine(self.config)
+                log_info(
+                    "ocr: compiled on "
+                    f"{self.config.compiled_device or 'CPU'} "
+                    f"({self.config.model} model)"
+                )
             return self._engine(data)
+
+    def record_dropped(self, count: int = 1) -> None:
+        if count > 0:
+            with self._lock:
+                self.dropped_blocks += count
 
     def layout(self, data: bytes):
         with self._lock:
@@ -536,6 +699,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stdout", action="store_true", help="Write Markdown to stdout.")
     parser.add_argument("--no-images", action="store_true", help="Omit extracted images.")
     parser.add_argument("--no-ocr", action="store_true", help="Disable OCR.")
+    parser.add_argument(
+        "--no-sanitize",
+        action="store_true",
+        help="Disable typography normalisation.",
+    )
     parser.add_argument("--password", metavar="SECRET", help="Password for encrypted documents.")
     parser.add_argument("--verify", action="store_true", help="Verify generated Markdown.")
     parser.add_argument(
@@ -580,30 +748,13 @@ def markdown_table(rows: list[list[str]]) -> list[str]:
     return [header, separator, *("| " + " | ".join(row) + " |" for row in normalized[1:])]
 
 
-def pptx_merge_origin(table, row_index: int, column_index: int):
-    for row in range(row_index, -1, -1):
-        for column in range(column_index, -1, -1):
-            candidate = table.cell(row, column)
-            if (
-                candidate.is_merge_origin
-                and row <= row_index < row + candidate.span_height
-                and column <= column_index < column + candidate.span_width
-            ):
-                return candidate
-    return None
-
-
 def pptx_table_rows(table) -> list[list[str]]:
     rows: list[list[str]] = []
     for row_index in range(len(table.rows)):
         row: list[str] = []
         for column_index in range(len(table.columns)):
             cell = table.cell(row_index, column_index)
-            text = cell.text
-            if cell.is_spanned:
-                origin = pptx_merge_origin(table, row_index, column_index)
-                if origin is not None:
-                    text = origin.text
+            text = "" if cell.is_spanned else cell.text
             row.append(text)
         rows.append(row)
     return rows
@@ -720,42 +871,240 @@ def convert_docx(source: Path, include_images: bool, password: str | None = None
             next_level += 1
         promoted_levels[size] = level
 
+    from docx.oxml import parse_xml
+    from docx.text.run import Run
+
+    footnote_texts: dict[str, str] = {}
+    endnote_texts: dict[str, str] = {}
+
+    def load_notes(part_name: str, target: dict[str, str]) -> None:
+        for part in document.part.package.iter_parts():
+            if str(part.partname) != part_name:
+                continue
+            try:
+                root = parse_xml(part.blob)
+            except Exception:
+                return
+            for kind in ("footnote", "endnote"):
+                for note in root.findall(qn(f"w:{kind}")):
+                    note_id = note.get(qn("w:id"))
+                    text = " ".join(
+                        node.text or "" for node in note.iter(qn("w:t"))
+                    ).strip()
+                    if note_id and text:
+                        target[str(note_id)] = text
+            return
+
+    load_notes("/word/footnotes.xml", footnote_texts)
+    load_notes("/word/endnotes.xml", endnote_texts)
+    used_notes: list[tuple[int, str]] = []
+    note_numbers: dict[tuple[str, str], int] = {}
+
+    def note_marker(kind: str, note_id: str) -> str:
+        key = (kind, note_id)
+        if key not in note_numbers:
+            number = len(note_numbers) + 1
+            note_numbers[key] = number
+            source = footnote_texts if kind == "footnote" else endnote_texts
+            used_notes.append((number, source[note_id]))
+        return f"[^{note_numbers[key]}]"
+
+    numbering: dict[tuple[str, int], tuple[str, int]] = {}
+    try:
+        numbering_root = document.part.numbering_part.element
+        abstract_levels: dict[str, dict[int, tuple[str, int]]] = {}
+        for abstract in numbering_root.findall(qn("w:abstractNum")):
+            abstract_id = abstract.get(qn("w:abstractNumId"))
+            levels: dict[int, tuple[str, int]] = {}
+            for level in abstract.findall(qn("w:lvl")):
+                level_id = int(level.get(qn("w:ilvl")) or 0)
+                fmt_element = level.find(qn("w:numFmt"))
+                start_element = level.find(qn("w:start"))
+                fmt = (
+                    fmt_element.get(qn("w:val"))
+                    if fmt_element is not None
+                    else "decimal"
+                )
+                start = int(start_element.get(qn("w:val")) or 1) if start_element is not None else 1
+                levels[level_id] = (fmt or "decimal", start)
+            if abstract_id is not None:
+                abstract_levels[str(abstract_id)] = levels
+        for num in numbering_root.findall(qn("w:num")):
+            num_id = num.get(qn("w:numId"))
+            reference = num.find(qn("w:abstractNumId"))
+            if num_id is None or reference is None:
+                continue
+            levels = abstract_levels.get(str(reference.get(qn("w:val"))), {})
+            for level_id, (fmt, start) in levels.items():
+                numbering[(str(num_id), level_id)] = (fmt, start)
+    except Exception:
+        numbering = {}
+
+    def list_info(paragraph) -> tuple[str | None, int, str, int] | None:
+        style_name = getattr(getattr(paragraph, "style", None), "name", None) or ""
+        style_lower = style_name.lower()
+        num_id: str | None = None
+        level_id = 0
+        p_pr = paragraph._p.pPr
+        num_pr = p_pr.numPr if p_pr is not None else None
+        if num_pr is not None:
+            if num_pr.numId is not None:
+                num_id = str(num_pr.numId.val)
+            if num_pr.ilvl is not None:
+                level_id = int(num_pr.ilvl.val)
+        if num_id is not None:
+            fmt, start = numbering.get((num_id, level_id), ("decimal", 1))
+            return num_id, level_id, fmt, start
+        if style_lower.startswith("list bullet"):
+            return None, 0, "bullet", 1
+        if style_lower.startswith("list number"):
+            return None, 0, "decimal", 1
+        return None
+
+    def format_run(run) -> str:
+        text = run.text
+        if not text or not text.strip():
+            return text
+        name = (run.font.name or "").lower()
+        if any(token in name for token in ("consol", "courier", "mono", "code", "menlo")):
+            fence = "``" if "`" in text else "`"
+            text = f"{fence}{text}{fence}"
+        if run.italic:
+            text = f"*{text}*"
+        if run.bold:
+            text = f"**{text}**"
+        if run.font.strike:
+            text = f"~~{text}~~"
+        return text
+
+    def paragraph_markdown(paragraph) -> str:
+        parts: list[str] = []
+        for child in paragraph._p.iterchildren():
+            if child.tag == qn("w:r"):
+                parts.append(format_run(Run(child, paragraph)))
+                for kind, reference_tag in (
+                    ("footnote", "w:footnoteReference"),
+                    ("endnote", "w:endnoteReference"),
+                ):
+                    for reference in child.iter(qn(reference_tag)):
+                        note_id = reference.get(qn("w:id"))
+                        source = (
+                            footnote_texts if kind == "footnote" else endnote_texts
+                        )
+                        if note_id and str(note_id) in source:
+                            parts.append(note_marker(kind, str(note_id)))
+            elif child.tag == qn("w:hyperlink"):
+                relation_id = child.get(qn("r:id"))
+                target = None
+                if relation_id:
+                    relation = document.part.rels.get(relation_id)
+                    target = getattr(relation, "target_ref", None)
+                link_text = "".join(
+                    node.text or "" for node in child.iter(qn("w:t"))
+                )
+                if link_text:
+                    parts.append(
+                        f"[{link_text}]({target})" if target else link_text
+                    )
+            elif child.tag == qn("w:ins"):
+                for run_element in child.iter(qn("w:r")):
+                    parts.append(format_run(Run(run_element, paragraph)))
+                    for kind, reference_tag in (
+                        ("footnote", "w:footnoteReference"),
+                        ("endnote", "w:endnoteReference"),
+                    ):
+                        for reference in run_element.iter(qn(reference_tag)):
+                            note_id = reference.get(qn("w:id"))
+                            source = (
+                                footnote_texts
+                                if kind == "footnote"
+                                else endnote_texts
+                            )
+                            if note_id and str(note_id) in source:
+                                parts.append(note_marker(kind, str(note_id)))
+        return "".join(parts).strip()
+
+    def append_images(element, target: list[str]) -> None:
+        if not include_images:
+            return
+        seen: set[str] = set()
+        for blip in element.xpath(".//a:blip"):
+            relation_id = blip.get(qn("r:embed"))
+            if (
+                relation_id is None
+                or relation_id in seen
+                or relation_id not in document.part.related_parts
+            ):
+                continue
+            seen.add(relation_id)
+            image = document.part.related_parts[relation_id]
+            if not getattr(image, "blob", None):
+                continue
+            encoded = base64.b64encode(image.blob).decode("ascii")
+            target.append(f"![](data:{image.content_type};base64,{encoded})")
+
+    def table_rows(table) -> list[list[str]]:
+        rows: list[list[str]] = []
+        for row in table.rows:
+            values: list[str] = []
+            previous = None
+            for cell in row.cells:
+                text = cell.text
+                tc_pr = cell._tc.tcPr
+                if tc_pr is not None:
+                    vertical = tc_pr.find(qn("w:vMerge"))
+                    if vertical is not None and vertical.get(qn("w:val")) != "restart":
+                        text = ""
+                if cell._tc is previous:
+                    text = ""
+                previous = cell._tc
+                values.append(text)
+            rows.append(values)
+        return rows
+
     blocks: list[str] = []
+    list_counters: dict[tuple[str, int], int] = {}
     for block in content:
         if isinstance(block, Paragraph):
             text = block.text.strip()
-            if text:
+            markdown_text = paragraph_markdown(block)
+            info = list_info(block)
+            if text or markdown_text:
                 level = heading_level(block)
-                if level is None and not is_list(block):
+                if level is None and info is None:
                     size = paragraph_size(block)
                     if size is not None and is_bold(block):
                         level = promoted_levels.get(size)
                 if level is not None:
                     blocks.append(f"{'#' * level} {text}")
-                elif is_list(block):
-                    name = getattr(getattr(block, "style", None), "name", None) or ""
-                    marker = "-" if name.lower().startswith("list bullet") else "1."
-                    blocks.append(f"{marker} {text}")
+                    list_counters.clear()
+                elif info is not None:
+                    num_id, level_id, fmt, start = info
+                    key = (num_id or "style", level_id)
+                    if fmt == "bullet":
+                        marker = "-"
+                    else:
+                        if key not in list_counters:
+                            list_counters[key] = start - 1
+                        list_counters[key] += 1
+                        marker = f"{list_counters[key]}."
+                    blocks.append(
+                        f"{'  ' * level_id}{marker} {markdown_text or text}"
+                    )
                 else:
-                    blocks.append(text)
-            if include_images:
-                for blip in block._p.xpath(".//a:blip"):
-                    relation_id = blip.get(qn("r:embed"))
-                    if (
-                        relation_id is None
-                        or relation_id not in document.part.related_parts
-                    ):
-                        continue
-                    image = document.part.related_parts[relation_id]
-                    if not getattr(image, "blob", None):
-                        continue
-                    encoded = base64.b64encode(image.blob).decode("ascii")
-                    blocks.append(f"![](data:{image.content_type};base64,{encoded})")
+                    blocks.append(markdown_text or text)
+                    list_counters.clear()
+            append_images(block._p, blocks)
         elif isinstance(block, Table):
-            rows = [[cell.text for cell in row.cells] for row in block.rows]
-            table = markdown_table(rows)
+            table = markdown_table(table_rows(block))
             if table:
                 blocks.append("\n".join(table))
+            append_images(block._tbl, blocks)
+
+    if used_notes:
+        blocks.append(
+            "\n".join(f"[^{number}]: {text}" for number, text in used_notes)
+        )
 
     return "\n\n".join(blocks) + ("\n" if blocks else "")
 
@@ -780,6 +1129,97 @@ def convert_pptx(source: Path, include_images: bool, password: str | None = None
                 items.append(shp)
         return items
 
+    def shape_box(shape):
+        top = getattr(shape, "top", None)
+        left = getattr(shape, "left", None)
+        width = getattr(shape, "width", None)
+        height = getattr(shape, "height", None)
+        top = 0 if top is None else int(top)
+        left = 0 if left is None else int(left)
+        width = 0 if width is None else int(width)
+        height = 0 if height is None else int(height)
+        return top, left, top + height, left + width
+
+    def visual_order(shapes):
+        band = 228_600  # a quarter inch in EMU
+        return sorted(
+            shapes,
+            key=lambda shape: (
+                shape_box(shape)[0] // band,
+                shape_box(shape)[1],
+            ),
+        )
+
+    def format_pptx_run(run) -> str:
+        text = run.text
+        if not text or not text.strip():
+            return text
+        if run.font.name and any(
+            token in run.font.name.lower()
+            for token in ("consol", "courier", "mono", "code", "menlo")
+        ):
+            text = f"`{text}`"
+        if run.font.italic:
+            text = f"*{text}*"
+        if run.font.bold:
+            text = f"**{text}**"
+        return text
+
+    def text_frame_blocks(text_frame) -> list[str]:
+        lines: list[str] = []
+        for paragraph in text_frame.paragraphs:
+            text = "".join(format_pptx_run(run) for run in paragraph.runs).strip()
+            if not text:
+                continue
+            level = max(0, int(getattr(paragraph, "level", 0) or 0))
+            bullet = False
+            p_pr = getattr(paragraph._p, "pPr", None)
+            if p_pr is not None:
+                bullet = bool(
+                    p_pr.find("{http://schemas.openxmlformats.org/drawingml/2006/main}buChar")
+                    is not None
+                    or p_pr.find("{http://schemas.openxmlformats.org/drawingml/2006/main}buAutoNum")
+                    is not None
+                )
+            if level > 0 or bullet:
+                lines.append(f"{'  ' * level}- {text}")
+            else:
+                lines.append(text)
+        return lines
+
+    def chart_table(chart) -> list[str]:
+        try:
+            plot = chart.plots[0]
+            categories = [str(category) for category in plot.categories]
+            series = list(plot.series)
+        except (AttributeError, IndexError, ValueError):
+            return []
+        if not series:
+            return []
+        rows = [["Category", *[str(s.name or f"Series {i}") for i, s in enumerate(series, 1)]]]
+        for index, category in enumerate(categories):
+            values = []
+            for item in series:
+                try:
+                    value = item.values[index]
+                except (IndexError, TypeError):
+                    value = ""
+                if value is None:
+                    values.append("")
+                elif isinstance(value, float) and value.is_integer():
+                    values.append(str(int(value)))
+                else:
+                    values.append(str(value))
+            rows.append([category, *values])
+        return markdown_table(rows)
+
+    def smartart_text(shape) -> list[str]:
+        element = getattr(shape, "element", None)
+        if element is None:
+            return []
+        texts = [node.text or "" for node in element.iter() if node.tag.endswith("}t")]
+        return [text.strip() for text in texts if text.strip()]
+
     for index, slide in enumerate(slides, 1):
         title_shape = slide.shapes.title
         title = title_shape.text.strip() if title_shape is not None else ""
@@ -788,39 +1228,77 @@ def convert_pptx(source: Path, include_images: bool, password: str | None = None
             heading += f": {title}"
         blocks.append(heading)
 
-        for shape in collect_shapes(slide.shapes):
-            if title_shape is not None and shape.shape_id == title_shape.shape_id:
-                continue
-            if getattr(shape, "has_text_frame", False):
-                text = shape.text_frame.text.strip()
-                if text:
-                    blocks.append(text)
-            if getattr(shape, "has_table", False):
-                table = markdown_table(pptx_table_rows(shape.table))
-                if table:
-                    blocks.append("\n".join(table))
-            if (
-                include_images
-                and getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE
-            ):
-                try:
-                    image = shape.image
-                except (KeyError, ValueError):
+        ordered_shapes = visual_order(list(slide.shapes))
+        for top_shape in ordered_shapes:
+            for shape in collect_shapes([top_shape]):
+                if title_shape is not None and shape.shape_id == title_shape.shape_id:
                     continue
-                if not getattr(image, "blob", None):
-                    continue
-                extension = (image.ext or "").lower()
-                mime_type = image.content_type or IMAGE_MIME_TYPES.get(
-                    extension, f"image/{extension}" if extension else "image/png"
-                )
-                encoded = base64.b64encode(image.blob).decode("ascii")
-                blocks.append(f"![](data:{mime_type};base64,{encoded})")
+                handled = False
+                if getattr(shape, "has_text_frame", False):
+                    text_lines = text_frame_blocks(shape.text_frame)
+                    if text_lines:
+                        blocks.append("\n".join(text_lines))
+                        handled = True
+                if getattr(shape, "has_table", False):
+                    table = markdown_table(pptx_table_rows(shape.table))
+                    if table:
+                        blocks.append("\n".join(table))
+                        handled = True
+                if getattr(shape, "has_chart", False):
+                    table = chart_table(shape.chart)
+                    if table:
+                        blocks.append("\n".join(table))
+                        handled = True
+                smartart = smartart_text(shape)
+                if (
+                    smartart
+                    and not getattr(shape, "has_text_frame", False)
+                    and not getattr(shape, "has_table", False)
+                    and not getattr(shape, "has_chart", False)
+                ):
+                    blocks.append("\n".join(f"- {text}" for text in smartart))
+                    handled = True
+                if (
+                    include_images
+                    and getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE
+                ):
+                    try:
+                        image = shape.image
+                    except (KeyError, ValueError):
+                        image = None
+                    if image is not None and getattr(image, "blob", None):
+                        extension = (image.ext or "").lower()
+                        mime_type = image.content_type or IMAGE_MIME_TYPES.get(
+                            extension,
+                            f"image/{extension}" if extension else "image/png",
+                        )
+                        encoded = base64.b64encode(image.blob).decode("ascii")
+                        blocks.append(f"![](data:{mime_type};base64,{encoded})")
+                    handled = True
+                shape_type = getattr(shape, "shape_type", None)
+                safe_types = {
+                    MSO_SHAPE_TYPE.AUTO_SHAPE,
+                    MSO_SHAPE_TYPE.TEXT_BOX,
+                    MSO_SHAPE_TYPE.PLACEHOLDER,
+                    MSO_SHAPE_TYPE.PICTURE,
+                    MSO_SHAPE_TYPE.LINE,
+                    MSO_SHAPE_TYPE.FREEFORM,
+                    None,
+                }
+                if not handled and shape_type not in safe_types:
+                    type_name = getattr(shape_type, "name", str(shape_type))
+                    blocks.append(
+                        f"<!-- docmd: omitted {type_name} shape on slide {index} -->"
+                    )
 
         if slide.has_notes_slide:
             notes_frame = getattr(slide.notes_slide, "notes_text_frame", None)
             notes = notes_frame.text.strip() if notes_frame is not None else ""
             if notes:
-                blocks.append(f"> **Speaker Notes:** {notes}")
+                note_lines = notes.splitlines()
+                quoted = [f"> **Speaker Notes:** {note_lines[0]}"]
+                quoted.extend(f"> {line}" for line in note_lines[1:])
+                blocks.append("\n".join(quoted))
         if index < len(slides):
             blocks.append("---")
 
@@ -899,25 +1377,98 @@ def ocr_items(engine, data):
     yield from zip(boxes, texts, scores)
 
 
-def ocr_pdf_page(page, engine) -> list[dict[str, object]]:
+def normalize_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return " ".join(re.findall(r"[a-z0-9]+", normalized))
+
+
+def token_similarity(left: str, right: str) -> float:
+    a = set(normalize_text(left).split())
+    b = set(normalize_text(right).split())
+    if not a or not b:
+        return 0.0
+    return len(a & b) / min(len(a), len(b))
+
+
+def text_matches(left: str, right: str, threshold: float = 0.8) -> bool:
+    na = normalize_text(left)
+    nb = normalize_text(right)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    if min(len(na), len(nb)) >= 4 and (na in nb or nb in na):
+        return True
+    return token_similarity(left, right) >= threshold
+
+
+def matches_any(text: str, candidates: list[str], threshold: float = 0.8) -> bool:
+    return any(text_matches(text, candidate, threshold) for candidate in candidates)
+
+
+def page_image_coverage(page) -> float:
+    page_area = max(1.0, page.rect.width * page.rect.height)
+    largest = 0.0
+    try:
+        infos = page.get_image_info()
+    except Exception:
+        return 0.0
+    for info in infos:
+        bbox = info.get("bbox")
+        if not bbox:
+            continue
+        area = max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1])
+        largest = max(largest, area)
+    return largest / page_area
+
+
+def ocr_confidence_threshold(engine) -> float:
+    config = getattr(engine, "config", None)
+    value = getattr(config, "confidence", 0.5)
+    return 0.5 if value is None else float(value)
+
+
+def ocr_pdf_page(
+    page,
+    engine,
+    digital_texts: list[str] | None = None,
+    max_image_pixels: int | None = None,
+) -> list[dict[str, object]] | None:
+    if hasattr(engine, "ensure_loaded"):
+        engine.ensure_loaded()
     try:
         pixmap = page.get_pixmap(dpi=200)
-    except Exception:
-        return []
+    except Exception as exc:
+        log_warning(f"OCR failed for page {page.number + 1}: {exc}")
+        return None
     if not pixmap or pixmap.width <= 0 or pixmap.height <= 0:
-        return []
+        return None
+    if max_image_pixels is not None and pixmap.width * pixmap.height > max_image_pixels:
+        raise BudgetError(
+            f"image budget exceeded for page {page.number + 1}: "
+            f"{pixmap.width * pixmap.height} pixels (limit {max_image_pixels})"
+        )
     scale_x = page.rect.width / pixmap.width
     scale_y = page.rect.height / pixmap.height
+    threshold = ocr_confidence_threshold(engine)
+    digital_texts = digital_texts or []
 
     lines: list[dict[str, object]] = []
     try:
         items = list(ocr_items(engine, pixmap.tobytes("png")))
-    except Exception:
-        return []
+    except Exception as exc:
+        log_warning(f"OCR failed for page {page.number + 1}: {exc}")
+        return None
     for item in items:
         box, text, score = item
         text = text.strip()
-        if not text or score is None or math.isnan(score) or score < 0.5:
+        if not text or score is None or math.isnan(score) or score < threshold:
+            if hasattr(engine, "record_dropped"):
+                engine.record_dropped()
+            continue
+        if len(text) <= 2 and not matches_any(text, digital_texts):
+            if hasattr(engine, "record_dropped"):
+                engine.record_dropped()
             continue
         xs = [point[0] for point in box]
         ys = [point[1] for point in box]
@@ -934,6 +1485,9 @@ def ocr_pdf_page(page, engine) -> list[dict[str, object]]:
                 "bbox": bbox,
                 "page": page.number,
                 "page_height": page.rect.height,
+                "page_width": page.rect.width,
+                "ocr": True,
+                "confidence": float(score),
             }
         )
     return lines
@@ -970,7 +1524,10 @@ def extract_layout_blocks(engine, image: bytes) -> list[dict[str, object]]:
                 }
             )
         return blocks
-    except Exception:
+    except Exception as exc:
+        if not getattr(engine, "_layout_failed", False):
+            setattr(engine, "_layout_failed", True)
+            log_info(f"layout: unavailable ({exc}); using geometric ordering")
         return []
 
 
@@ -1041,15 +1598,25 @@ def order_lines_by_layout(
 
 
 def ocr_image_text(engine, image: bytes) -> str:
+    if hasattr(engine, "ensure_loaded"):
+        engine.ensure_loaded()
     try:
         raw_items = list(ocr_items(engine, image))
-    except Exception:
+    except Exception as exc:
+        log_warning(f"OCR failed for image: {exc}")
         return ""
+    threshold = ocr_confidence_threshold(engine)
     lines: list[dict[str, object]] = []
     for item in raw_items:
         box, text, score = item
         text = text.strip()
-        if not text or score is None or math.isnan(score) or score < 0.5:
+        if not text or score is None or math.isnan(score) or score < threshold:
+            if hasattr(engine, "record_dropped"):
+                engine.record_dropped()
+            continue
+        if len(text) <= 2:
+            if hasattr(engine, "record_dropped"):
+                engine.record_dropped()
             continue
         xs = [point[0] for point in box]
         ys = [point[1] for point in box]
@@ -1074,15 +1641,243 @@ def ocr_image_text(engine, image: bytes) -> str:
     return " ".join(line["text"] for line in ordered)
 
 
+def _line_link(page_links: list[dict[str, object]], bbox) -> str | None:
+    cx = (bbox[0] + bbox[2]) / 2
+    cy = (bbox[1] + bbox[3]) / 2
+    for link in page_links:
+        uri = link.get("uri")
+        rect = link.get("from")
+        if not uri or rect is None:
+            continue
+        if (
+            rect.x0 - 2 <= cx <= rect.x1 + 2
+            and rect.y0 - 2 <= cy <= rect.y1 + 2
+        ):
+            return str(uri)
+    return None
+
+
+def layout_blocks_for_page(
+    page, layout_engine, max_image_pixels: int | None = None
+) -> list[dict[str, object]]:
+    if layout_engine is None:
+        return []
+    try:
+        pixmap = page.get_pixmap(dpi=150)
+        image = pixmap.tobytes("png")
+    except Exception as exc:
+        log_info(f"layout: page {page.number + 1} unavailable ({exc})")
+        return []
+    if max_image_pixels is not None and pixmap.width * pixmap.height > max_image_pixels:
+        raise BudgetError(
+            f"image budget exceeded for page {page.number + 1}: "
+            f"{pixmap.width * pixmap.height} pixels (limit {max_image_pixels})"
+        )
+    blocks = extract_layout_blocks(layout_engine, image)
+    if not blocks or pixmap.width <= 0 or pixmap.height <= 0:
+        return []
+    scale_x = page.rect.width / pixmap.width
+    scale_y = page.rect.height / pixmap.height
+    return [
+        {
+            "bbox": (
+                block["bbox"][0] * scale_x,
+                block["bbox"][1] * scale_y,
+                block["bbox"][2] * scale_x,
+                block["bbox"][3] * scale_y,
+            ),
+            "class": block.get("class", "text"),
+            "score": block.get("score", 0.0),
+        }
+        for block in blocks
+    ]
+
+
+def _bbox_contains(outer, inner, tolerance: float = 2.0) -> bool:
+    return (
+        outer[0] - tolerance <= inner[0]
+        and outer[1] - tolerance <= inner[1]
+        and inner[2] <= outer[2] + tolerance
+        and inner[3] <= outer[3] + tolerance
+    )
+
+
+def detect_pdf_tables(
+    lines: list[dict[str, object]],
+    page_width: float,
+    page_height: float,
+    anchor_tolerance: float = 22.0,
+    row_gap: float = 8.0,
+    min_anchor_lines: int = 3,
+    min_multi: int = 3,
+    include_ocr: bool = False,
+) -> list[dict[str, object]]:
+    """Recover simple text tables from aligned x anchors on a PDF page."""
+    candidates = [
+        line
+        for line in lines
+        if (include_ocr or not line.get("ocr"))
+        and not line.get("ocr_error")
+        and not line.get("_in_table")
+        and line["bbox"][1] > page_height * 0.07
+        and line["bbox"][3] < page_height * 0.94
+        and len(str(line["text"]).strip()) > 0
+    ]
+    if len(candidates) < 6:
+        return []
+
+    anchors: list[dict[str, object]] = []
+    for line in sorted(candidates, key=lambda item: item["bbox"][0]):
+        x = float(line["bbox"][0])
+        if anchors and abs(x - float(anchors[-1]["x"])) <= anchor_tolerance:
+            anchors[-1]["lines"].append(line)
+            anchors[-1]["x"] = (
+                float(anchors[-1]["x"]) * (len(anchors[-1]["lines"]) - 1) + x
+            ) / len(anchors[-1]["lines"])
+        else:
+            anchors.append({"x": x, "lines": [line]})
+    anchors = [
+        anchor for anchor in anchors if len(anchor["lines"]) >= min_anchor_lines
+    ]
+    if len(anchors) < 2:
+        return []
+
+    def nearest_anchor(line) -> int | None:
+        x = float(line["bbox"][0])
+        best = min(anchors, key=lambda item: abs(float(item["x"]) - x))
+        return (
+            anchors.index(best)
+            if abs(float(best["x"]) - x) <= anchor_tolerance + 4
+            else None
+        )
+
+    rows: list[dict[str, object]] = []
+    for line in sorted(candidates, key=lambda item: (item["bbox"][1], item["bbox"][0])):
+        y0, y1 = float(line["bbox"][1]), float(line["bbox"][3])
+        placed = False
+        for row in reversed(rows[-3:]):
+            if (
+                y0 <= float(row["y1"]) + row_gap
+                and y1 >= float(row["y0"]) - row_gap
+            ):
+                row["lines"].append(line)
+                row["y0"] = min(float(row["y0"]), y0)
+                row["y1"] = max(float(row["y1"]), y1)
+                placed = True
+                break
+        if not placed:
+            rows.append({"y0": y0, "y1": y1, "lines": [line]})
+
+    for row in rows:
+        row["anchors"] = {
+            index
+            for index in (nearest_anchor(line) for line in row["lines"])
+            if index is not None
+        }
+
+    merged_rows: list[dict[str, object]] = []
+    for row in rows:
+        if (
+            merged_rows
+            and len(row["anchors"]) == 1
+            and row["y0"] - float(merged_rows[-1]["y1"]) <= 25
+        ):
+            merged_rows[-1]["lines"].extend(row["lines"])
+            merged_rows[-1]["anchors"] |= row["anchors"]
+            merged_rows[-1]["y1"] = max(
+                float(merged_rows[-1]["y1"]), float(row["y1"])
+            )
+            continue
+        merged_rows.append(row)
+
+    multi = [index for index, row in enumerate(merged_rows) if len(row["anchors"]) >= 2]
+    if len(multi) < min_multi:
+        return []
+
+    runs: list[list[int]] = []
+    for index in multi:
+        if runs and index == runs[-1][-1] + 1:
+            runs[-1].append(index)
+        else:
+            runs.append([index])
+    run = max(runs, key=len)
+    start, end = run[0], run[-1]
+    if end + 1 < len(merged_rows):
+        trailing = merged_rows[end + 1]
+        if float(trailing["y0"]) - float(merged_rows[end]["y1"]) <= 50:
+            end += 1
+
+    table_rows = merged_rows[start : end + 1]
+    anchor_counts: dict[int, int] = {}
+    for row in table_rows:
+        if len(row["anchors"]) >= 2:
+            for index in row["anchors"]:
+                anchor_counts[index] = anchor_counts.get(index, 0) + 1
+    table_anchors = sorted(
+        index for index, count in anchor_counts.items() if count >= 2
+    )
+    if len(table_anchors) < 2 or len(table_rows) < 3:
+        return []
+
+    rows_out: list[list[str]] = []
+    used_lines: list[dict[str, object]] = []
+    for row in table_rows:
+        cells: dict[int, list[str]] = {index: [] for index in table_anchors}
+        for line in row["lines"]:
+            index = nearest_anchor(line)
+            if index in cells:
+                cells[index].append(str(line["text"]).strip())
+                used_lines.append(line)
+        if any(cells[index] for index in table_anchors):
+            rows_out.append(
+                ["<br>".join(cells[index]) for index in table_anchors]
+            )
+    if len(rows_out) < 3:
+        return []
+
+    for line in used_lines:
+        line["_in_table"] = True
+    boxes = [line["bbox"] for line in used_lines]
+    bbox = (
+        min(box[0] for box in boxes),
+        min(box[1] for box in boxes),
+        max(box[2] for box in boxes),
+        max(box[3] for box in boxes),
+    )
+    return [
+        {
+            "text": "",
+            "table": rows_out,
+            "bbox": bbox,
+            "page": used_lines[0]["page"],
+            "page_height": page_height,
+            "page_width": page_width,
+            "size": 0.0,
+        }
+    ]
+
+
 def extract_pdf_lines(
     source: Path,
     password: str | None = None,
     use_ocr: bool = True,
     ocr_engine: OcrEngine | None = None,
     document=None,
+    layout_engine=None,
+    max_image_pixels: int | None = None,
 ) -> list[dict[str, object]]:
     if use_ocr and ocr_engine is None:
         ocr_engine = load_ocr_engine()
+    if layout_engine is None:
+        layout_engine = ocr_engine if hasattr(ocr_engine, "layout") else None
+    if layout_engine is None:
+        layout_engine = load_layout_engine()
+    if use_ocr and ocr_engine is not None and hasattr(ocr_engine, "ensure_loaded"):
+        try:
+            ocr_engine.ensure_loaded()
+        except Exception as exc:
+            raise OcrError(f"OCR engine failed to load: {exc}") from exc
+
     should_close = False
     if document is None:
         document = open_pdf(source, password)
@@ -1091,6 +1886,7 @@ def extract_pdf_lines(
     try:
         for page in document:
             page_lines: list[dict[str, object]] = []
+            page_links = page.get_links()
             for block in page.get_text("dict").get("blocks", []):
                 for line in block.get("lines", []):
                     spans = line.get("spans", [])
@@ -1105,13 +1901,86 @@ def extract_pdf_lines(
                             "bbox": line["bbox"],
                             "page": page.number,
                             "page_height": page.rect.height,
+                            "page_width": page.rect.width,
+                            "link": _line_link(page_links, line["bbox"]),
                         }
                     )
-            if ocr_engine is not None and sum(
-                len(line["text"]) for line in page_lines
-            ) < 50:
-                page_lines = ocr_pdf_page(page, ocr_engine) or page_lines
-            lines.extend(order_pdf_lines(page_lines, page.rect.width))
+
+            tables = detect_pdf_tables(
+                page_lines, page.rect.width, page.rect.height
+            )
+            page_lines = [line for line in page_lines if not line.get("_in_table")]
+            digital_texts = [str(line["text"]) for line in page_lines]
+            for table in tables:
+                for row in table["table"]:
+                    digital_texts.extend(
+                        cell.replace("<br>", " ") for cell in row if cell
+                    )
+            digital_characters = sum(len(text) for text in digital_texts)
+            trigger_ocr = use_ocr and ocr_engine is not None and (
+                digital_characters < 50 or page_image_coverage(page) > 0.6
+            )
+            if trigger_ocr:
+                ocr_lines = ocr_pdf_page(
+                    page,
+                    ocr_engine,
+                    digital_texts=digital_texts,
+                    max_image_pixels=max_image_pixels,
+                )
+                if ocr_lines is None:
+                    page_lines.append(
+                        {
+                            "text": (
+                                f"<!-- OCR failed for page {page.number + 1} -->"
+                            ),
+                            "size": 0.0,
+                            "bbox": (0.0, 0.0, 0.0, 0.0),
+                            "page": page.number,
+                            "page_height": page.rect.height,
+                            "page_width": page.rect.width,
+                            "ocr_error": True,
+                        }
+                    )
+                else:
+                    for ocr_line in ocr_lines:
+                        if not matches_any(str(ocr_line["text"]), digital_texts):
+                            page_lines.append(ocr_line)
+                    ocr_candidates = [
+                        line for line in page_lines if line.get("ocr")
+                    ]
+                    if len(ocr_candidates) >= 6:
+                        ocr_tables = detect_pdf_tables(
+                            ocr_candidates,
+                            page.rect.width,
+                            page.rect.height,
+                            anchor_tolerance=8,
+                            row_gap=8,
+                            min_anchor_lines=2,
+                            min_multi=2,
+                            include_ocr=True,
+                        )
+                        if ocr_tables:
+                            page_lines = [
+                                line
+                                for line in page_lines
+                                if not line.get("_in_table")
+                            ]
+                            tables.extend(ocr_tables)
+            page_lines.extend(tables)
+
+            blocks = layout_blocks_for_page(
+                page, layout_engine, max_image_pixels=max_image_pixels
+            )
+            if blocks:
+                ordered = order_lines_by_layout(
+                    page_lines,
+                    page_width=page.rect.width,
+                    page_height=page.rect.height,
+                    layout_blocks=blocks,
+                )
+            else:
+                ordered = order_pdf_lines(page_lines, page.rect.width)
+            lines.extend(ordered)
     finally:
         if should_close:
             document.close()
@@ -1132,15 +2001,17 @@ def strip_pdf_margins(lines: list[dict[str, object]]) -> list[dict[str, object]]
             counts[key] = counts.get(key, 0) + 1
 
     page_number = re.compile(
-        r"(?:page\s+)?[-–—]?\s*\d+\s*[-–—]?(?:\s*(?:/|of)\s*\d+)?",
+        r"(?:page\s*)?[-–—]?\s*\d+\s*[-–—]?(?:\s*(?:/|of)\s*\d+)?",
         re.IGNORECASE,
     )
     kept: list[dict[str, object]] = []
     for line, in_margin in zip(lines, margin_flags):
-        if not in_margin:
+        if line.get("table") or line.get("ocr_error") or not in_margin:
             kept.append(line)
             continue
-        text = " ".join(line["text"].split())
+        text = " ".join(str(line.get("text", "")).split())
+        if not text:
+            continue
         if counts[text.casefold()] >= 2 or page_number.fullmatch(text):
             continue
         kept.append(line)
@@ -1154,6 +2025,7 @@ def pdf_image_blocks(
     ocr_engine: OcrEngine | None = None,
     document=None,
     ocr_cache: dict[str, str] | None = None,
+    max_image_pixels: int | None = None,
 ) -> list[tuple[int, str]]:
     if use_ocr and ocr_engine is None:
         ocr_engine = load_ocr_engine()
@@ -1179,6 +2051,18 @@ def pdf_image_blocks(
                 image = extracted.get("image")
                 if not image:
                     continue
+                width = int(extracted.get("width") or 0)
+                height = int(extracted.get("height") or 0)
+                if (
+                    max_image_pixels is not None
+                    and width > 0
+                    and height > 0
+                    and width * height > max_image_pixels
+                ):
+                    raise BudgetError(
+                        f"image budget exceeded on page {page.number + 1}: "
+                        f"{width * height} pixels (limit {max_image_pixels})"
+                    )
                 extension = (extracted.get("ext") or "").lower()
                 mime_type = IMAGE_MIME_TYPES.get(
                     extension,
@@ -1209,6 +2093,84 @@ def pdf_image_blocks(
     return blocks
 
 
+def _pdf_line_gap(previous: dict[str, object], line: dict[str, object]) -> float:
+    return float(line["bbox"][1]) - float(previous["bbox"][3])
+
+
+def _join_pdf_lines(texts: list[str]) -> str:
+    result = ""
+    for text in texts:
+        if not result:
+            result = text
+            continue
+        previous = result.rstrip()
+        if (
+            previous.endswith("-")
+            and text[:1].islower()
+            and "://" not in previous
+            and "www." not in previous
+            and "](" not in previous
+            and len(previous.rsplit(None, 1)[-1]) > 2
+        ):
+            result = previous[:-1] + text
+        else:
+            result = f"{previous} {text}"
+    return result
+
+
+def _pdf_list_text(text: str) -> str | None:
+    match = LIST_ITEM_RE.match(text)
+    if match is None:
+        return None
+    item = text[match.end() :].strip()
+    if not item:
+        return None
+    return f"- {item}"
+
+
+def _pdf_line_display_text(line: dict[str, object]) -> str:
+    text = str(line.get("text", "")).strip()
+    link = line.get("link")
+    if link and text and "](" not in text:
+        return f"[{text}]({link})"
+    return text
+
+
+def merge_linked_pdf_lines(
+    lines: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Rejoin a link annotation that PyMuPDF split across adjacent lines."""
+    merged: list[dict[str, object]] = []
+    for line in lines:
+        if merged:
+            previous = merged[-1]
+            same_link = (
+                line.get("link")
+                and previous.get("link") == line.get("link")
+                and previous.get("page") == line.get("page")
+                and not previous.get("table")
+                and not line.get("table")
+                and not previous.get("ocr_error")
+                and not line.get("ocr_error")
+            )
+            if same_link:
+                gap = float(line["bbox"][1]) - float(previous["bbox"][3])
+                if gap <= 20:
+                    left = str(previous["text"])
+                    right = str(line["text"])
+                    joiner = "" if "://" in left or "://" in right else " "
+                    previous["text"] = left + joiner + right
+                    previous["bbox"] = (
+                        min(previous["bbox"][0], line["bbox"][0]),
+                        min(previous["bbox"][1], line["bbox"][1]),
+                        max(previous["bbox"][2], line["bbox"][2]),
+                        max(previous["bbox"][3], line["bbox"][3]),
+                    )
+                    continue
+        merged.append(line)
+    return merged
+
+
 def convert_pdf(
     source: Path,
     include_images: bool,
@@ -1216,6 +2178,9 @@ def convert_pdf(
     use_ocr: bool = True,
     ocr_engine: OcrEngine | None = None,
     ocr_cache: dict[str, str] | None = None,
+    layout_engine=None,
+    max_pages: int | None = None,
+    max_image_pixels: int | None = None,
 ) -> str:
     if use_ocr and ocr_engine is None:
         ocr_engine = load_ocr_engine()
@@ -1223,9 +2188,22 @@ def convert_pdf(
         ocr_cache = {}
     document = open_pdf(source, password)
     try:
-        lines = strip_pdf_margins(
-            extract_pdf_lines(
-                source, password, use_ocr, ocr_engine, document=document
+        if max_pages is not None and len(document) > max_pages:
+            raise BudgetError(
+                f"page budget exceeded for {source}: {len(document)} pages "
+                f"(limit {max_pages})"
+            )
+        lines = merge_linked_pdf_lines(
+            strip_pdf_margins(
+                extract_pdf_lines(
+                    source,
+                    password,
+                    use_ocr,
+                    ocr_engine,
+                    document=document,
+                    layout_engine=layout_engine,
+                    max_image_pixels=max_image_pixels,
+                )
             )
         )
         image_entries = (
@@ -1236,24 +2214,36 @@ def convert_pdf(
                 ocr_engine,
                 document=document,
                 ocr_cache=ocr_cache,
+                max_image_pixels=max_image_pixels,
             )
             if include_images
             else []
         )
     finally:
         document.close()
+
     page_text: dict[object, str] = {}
     for line in lines:
+        if line.get("ocr_error"):
+            continue
         page_number = line["page"]
+        if line.get("table"):
+            cells = [
+                cell.replace("<br>", " ")
+                for row in line["table"]
+                for cell in row
+            ]
+            page_text[page_number] = (
+                f"{page_text.get(page_number, '')} {' '.join(cells)}"
+            )
+            continue
         page_text[page_number] = f"{page_text.get(page_number, '')} {line['text']}"
-    page_text = {
-        page_number: " ".join(text.split()).casefold()
-        for page_number, text in page_text.items()
-    }
 
     size_counts: dict[float, int] = {}
     for line in lines:
-        size = line["size"]
+        if line.get("table") or line.get("ocr_error"):
+            continue
+        size = float(line["size"])
         size_counts[size] = size_counts.get(size, 0) + 1
     if not size_counts:
         return "\n\n".join(block for _, block in image_entries) + (
@@ -1265,43 +2255,121 @@ def convert_pdf(
         (size for size in size_counts if size > body_size + 0.5),
         reverse=True,
     )
-    heading_levels = {size: min(index, 3) for index, size in enumerate(heading_sizes, 1)}
+    heading_levels = {
+        size: min(index, 3) for index, size in enumerate(heading_sizes, 1)
+    }
+    body_texts = {
+        normalize_text(str(line["text"]))
+        for line in lines
+        if not line.get("table")
+        and not line.get("ocr_error")
+        and not line.get("ocr")
+        and float(line["size"]) <= body_size + 0.5
+    }
 
     images_by_page: dict[int, list[str]] = {}
     for page_number, block in image_entries:
         if block.startswith(IMAGE_TEXT_PREFIX):
-            caption = " ".join(block[len(IMAGE_TEXT_PREFIX) :].split()).casefold()
-            if caption and caption in page_text.get(page_number, ""):
+            caption = block[len(IMAGE_TEXT_PREFIX) :]
+            page_value = page_text.get(page_number, "")
+            if caption and (
+                " ".join(caption.split()).casefold()
+                in " ".join(page_value.split()).casefold()
+                or token_similarity(caption, page_value) >= 0.8
+            ):
+                log_info(
+                    f"pdf: suppressed duplicate image text on page {page_number + 1}"
+                )
                 continue
         images_by_page.setdefault(page_number, []).append(block)
+
+    # Median positive line gap per page drives paragraph breaks.
+    page_gaps: dict[object, float] = {}
+    for page_number in {line["page"] for line in lines}:
+        page_lines = [line for line in lines if line["page"] == page_number]
+        gaps = [
+            _pdf_line_gap(previous, line)
+            for previous, line in zip(page_lines, page_lines[1:])
+            if _pdf_line_gap(previous, line) > 1
+        ]
+        if gaps:
+            gaps.sort()
+            page_gaps[page_number] = gaps[len(gaps) // 2]
 
     text_blocks: dict[int, list[str]] = {}
     paragraph: list[str] = []
     current_page: int | None = None
+    previous_line: dict[str, object] | None = None
+
+    def flush() -> None:
+        nonlocal paragraph
+        if paragraph and current_page is not None:
+            text_blocks.setdefault(current_page, []).append(_join_pdf_lines(paragraph))
+        paragraph = []
+
     for line in lines:
         if line["page"] != current_page:
-            if paragraph and current_page is not None:
-                text_blocks.setdefault(current_page, []).append(" ".join(paragraph))
-                paragraph = []
+            flush()
             current_page = line["page"]
-        level = heading_levels.get(line["size"])
-        if level is not None:
-            if paragraph and current_page is not None:
-                text_blocks.setdefault(current_page, []).append(" ".join(paragraph))
-                paragraph = []
-            if current_page is not None:
-                text_blocks.setdefault(current_page, []).append(
-                    f"{'#' * level} {line['text']}"
-                )
+            previous_line = None
+
+        if line.get("table"):
+            flush()
+            table = markdown_table(line["table"])
+            if table:
+                text_blocks.setdefault(current_page, []).append("\n".join(table))
+            previous_line = line
+            continue
+        if line.get("ocr_error"):
+            flush()
+            text_blocks.setdefault(current_page, []).append(str(line["text"]))
+            previous_line = line
+            continue
+
+        gap = None
+        if previous_line is not None:
+            gap = _pdf_line_gap(previous_line, line)
+        if (
+            paragraph
+            and gap is not None
+            and gap > max(8.0, page_gaps.get(current_page, 12.0) * 1.4)
+        ):
+            flush()
+
+        text = str(line["text"])
+        ocr_line = bool(line.get("ocr"))
+        short_enough = len(text.split()) <= 12
+        candidate_level = heading_levels.get(float(line["size"]))
+        if (
+            candidate_level is not None
+            and short_enough
+            and not ocr_line
+            and not LIST_ITEM_RE.match(text)
+            and normalize_text(text) not in body_texts
+        ):
+            flush()
+            text_blocks.setdefault(current_page, []).append(
+                f"{'#' * candidate_level} {_pdf_line_display_text(line)}"
+            )
         else:
-            paragraph.append(line["text"])
-    if paragraph and current_page is not None:
-        text_blocks.setdefault(current_page, []).append(" ".join(paragraph))
+            list_text = _pdf_list_text(text)
+            if list_text is not None:
+                flush()
+                text_blocks.setdefault(current_page, []).append(
+                    _pdf_line_display_text({**line, "text": list_text})
+                )
+            else:
+                paragraph.append(_pdf_line_display_text(line))
+        previous_line = line
+    flush()
 
     blocks: list[str] = []
     for page in sorted(set(text_blocks) | set(images_by_page)):
         blocks.extend(text_blocks.get(page, []))
         blocks.extend(images_by_page.get(page, []))
+
+    if ocr_engine is not None and getattr(ocr_engine, "dropped_blocks", 0):
+        log_info(f"ocr: dropped {ocr_engine.dropped_blocks} low-confidence blocks")
 
     return "\n\n".join(blocks) + ("\n" if blocks else "")
 
@@ -1313,13 +2381,17 @@ def convert_document(
     use_ocr: bool = True,
     ocr_engine: OcrEngine | None = None,
     ocr_cache: dict[str, str] | None = None,
+    max_pages: int | None = None,
+    max_image_pixels: int | None = None,
 ) -> str:
     suffix = source.suffix.lower()
-    if suffix == ".docx":
-        return convert_docx(source, include_images, password)
-    if suffix == ".pptx":
-        return convert_pptx(source, include_images, password)
-    if suffix == ".pdf":
+    if suffix not in SUPPORTED_EXTENSIONS:
+        raise ValueError(f"unsupported input format: {source.suffix}")
+    try:
+        if suffix == ".docx":
+            return convert_docx(source, include_images, password)
+        if suffix == ".pptx":
+            return convert_pptx(source, include_images, password)
         return convert_pdf(
             source,
             include_images,
@@ -1327,8 +2399,13 @@ def convert_document(
             use_ocr,
             ocr_engine=ocr_engine,
             ocr_cache=ocr_cache,
+            max_pages=max_pages,
+            max_image_pixels=max_image_pixels,
         )
-    raise ValueError(f"unsupported input format: {source.suffix}")
+    except (CorruptDocumentError, EncryptedDocumentError, OcrError, BudgetError):
+        raise
+    except Exception as exc:
+        raise CorruptDocumentError(f"corrupt document: {source}") from exc
 
 
 IMAGE_EXTENSIONS = {
@@ -1369,20 +2446,82 @@ def get_disallowed_translation() -> dict[int, None]:
     return _DISALLOWED_TRANSLATION
 
 
-def sanitize_ascii(markdown: str) -> str:
-    text = unicodedata.normalize("NFKC", markdown)
+def _normalize_prose(segment: str) -> str:
+    text = unicodedata.normalize("NFC", segment)
     text = text.translate(get_disallowed_translation())
-    return text.translate(ASCII_TRANSLATION)
+    return text.translate(TYPOGRAPHY_TRANSLATION)
+
+
+def _normalize_markdown_line(line: str) -> str:
+    if REFERENCE_DEF_RE.match(line):
+        return line
+    parts: list[str] = []
+    position = 0
+    for match in INLINE_PROTECT_RE.finditer(line):
+        parts.append(_normalize_prose(line[position : match.start()]))
+        parts.append(match.group(0))
+        position = match.end()
+    parts.append(_normalize_prose(line[position:]))
+    return "".join(parts)
+
+
+def normalize_typography(markdown: str) -> str:
+    """Normalise prose typography without rewriting code or link destinations."""
+    lines = markdown.splitlines(keepends=True)
+    output: list[str] = []
+    fence_state: tuple[str, int] | None = None
+    for line in lines:
+        body = line.rstrip("\r\n")
+        suffix = line[len(body) :]
+        info = fence_info(body)
+        if info is not None:
+            output.append(body + suffix)
+            if fence_state is None:
+                fence_state = (info[0], info[1])
+            elif fence_state[0] == info[0] and info[1] >= fence_state[1] and not info[2]:
+                fence_state = None
+            continue
+        if fence_state is not None:
+            output.append(body + suffix)
+        else:
+            output.append(_normalize_markdown_line(body) + suffix)
+    return "".join(output)
+
+
+def sanitize_ascii(markdown: str) -> str:
+    """Backward-compatible alias for normalize_typography."""
+    return normalize_typography(markdown)
+
+
+ASSET_FILE_RE = re.compile(r"^image-\d{3,}\.[A-Za-z0-9]+$")
+
+
+def _clear_generated_assets(assets: Path) -> None:
+    if not assets.is_dir():
+        return
+    for path in assets.iterdir():
+        if path.is_file() and ASSET_FILE_RE.match(path.name):
+            path.unlink()
+    try:
+        assets.rmdir()
+    except OSError:
+        pass
 
 
 def write_markdown(markdown: str, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
+    assets = output.parent / f"{output.stem}.assets"
     if not DATA_URI_RE.search(markdown):
         output.write_text(markdown, encoding="utf-8")
+        _clear_generated_assets(assets)
         return
 
-    assets = output.parent / f"{output.stem}.assets"
-    assets.mkdir(parents=True, exist_ok=True)
+    temp_assets = assets.with_name(
+        f".{assets.name}.tmp-{os.getpid()}-{threading.get_ident()}"
+    )
+    if temp_assets.exists():
+        shutil.rmtree(temp_assets)
+    temp_assets.mkdir(parents=True)
     counter = 0
 
     def replace(match: re.Match[str]) -> str:
@@ -1391,11 +2530,18 @@ def write_markdown(markdown: str, output: Path) -> None:
         content_type = match.group(2)
         extension = IMAGE_EXTENSIONS.get(content_type, ".bin")
         name = f"image-{counter:03d}{extension}"
-        (assets / name).write_bytes(base64.b64decode(match.group(3)))
+        (temp_assets / name).write_bytes(base64.b64decode(match.group(3)))
         href = quote(f"{assets.name}/{name}")
         return f"![{match.group(1)}]({href})"
 
-    output.write_text(DATA_URI_RE.sub(replace, markdown), encoding="utf-8")
+    rendered = DATA_URI_RE.sub(replace, markdown)
+    if assets.is_dir():
+        for path in assets.iterdir():
+            if path.is_file() and not ASSET_FILE_RE.match(path.name):
+                shutil.copy2(path, temp_assets / path.name)
+        shutil.rmtree(assets)
+    temp_assets.replace(assets)
+    output.write_text(rendered, encoding="utf-8")
 
 
 def discover_documents(source: Path, exclude: Path | None = None) -> list[Path]:
@@ -1429,6 +2575,15 @@ def convert_source(
     ocr_cache: dict[str, str] | None = None,
 ) -> tuple[str | None, int]:
     try:
+        try:
+            size = source.stat().st_size
+        except OSError:
+            size = 0
+        if size > options.max_bytes:
+            raise BudgetError(
+                f"byte budget exceeded for {source}: {size} bytes "
+                f"(limit {options.max_bytes})"
+            )
         markdown = convert_document(
             source,
             include_images=options.include_images,
@@ -1436,15 +2591,28 @@ def convert_source(
             use_ocr=options.use_ocr,
             ocr_engine=ocr_engine,
             ocr_cache=ocr_cache,
+            max_pages=options.max_pages,
+            max_image_pixels=options.max_image_pixels,
         )
+        if not markdown.strip():
+            raise CorruptDocumentError(
+                f"no content could be extracted from {source}"
+            )
     except Exception as exc:
         print(f"docmd: error: {exc}", file=sys.stderr)
         return None, exit_code_for(exc)
-    return sanitize_ascii(markdown), 0
+    if options.sanitize:
+        markdown = normalize_typography(markdown)
+    return markdown, 0
 
 
 def report_verify_errors(markdown: str, base_dir: Path) -> int:
-    errors = verify_markdown(markdown, base_dir)
+    errors, counts = verify_markdown_counts(markdown, base_dir)
+    log_info(
+        "verify: checked "
+        f"{counts['fences']} fence(s), {counts['tables']} table(s), "
+        f"{counts['links']} link(s), {counts['images']} image(s)"
+    )
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
@@ -1456,32 +2624,13 @@ def document_output_path(out: Path, source: Path, document: Path) -> Path:
     return out / relative.parent / f"{relative.stem}.md"
 
 
-def document_command(
-    document: Path, output: Path, options: ConversionOptions
-) -> list[str]:
-    command = [
-        sys.executable,
-        str(Path(__file__).resolve()),
-        str(document),
-        "-o",
-        str(output),
-        "-q",
-    ]
-    if not options.include_images:
-        command.append("--no-images")
-    if (not options.use_ocr) or document.suffix.lower() != ".pdf":
-        command.append("--no-ocr")
-    if options.verify:
-        command.append("--verify")
-    return command
-
-
 def convert_one(
     document: Path,
     output: Path,
     options: ConversionOptions,
     ocr_engine: OcrEngine | None = None,
     ocr_cache: dict[str, str] | None = None,
+    announce: bool = True,
 ) -> int:
     markdown, status = convert_source(
         document, options, ocr_engine=ocr_engine, ocr_cache=ocr_cache
@@ -1501,9 +2650,29 @@ def convert_one(
             return 1
         if report_verify_errors(verified_text, output.parent):
             return 1
-    if not options.quiet:
+    if announce and not options.quiet:
         print(f"docmd: wrote {output}", file=sys.stderr)
     return 0
+
+
+def commit_staged_output(staged: Path, final: Path) -> None:
+    final.parent.mkdir(parents=True, exist_ok=True)
+    staged_assets = staged.parent / f"{staged.stem}.assets"
+    final_assets = final.parent / f"{final.stem}.assets"
+    if staged_assets.is_dir():
+        final_assets.mkdir(parents=True, exist_ok=True)
+        for path in final_assets.iterdir():
+            if path.is_file() and ASSET_FILE_RE.match(path.name):
+                path.unlink()
+        for path in staged_assets.iterdir():
+            shutil.move(str(path), final_assets / path.name)
+        try:
+            staged_assets.rmdir()
+        except OSError:
+            pass
+    else:
+        _clear_generated_assets(final_assets)
+    staged.replace(final)
 
 
 def convert_directory(
@@ -1543,51 +2712,86 @@ def convert_directory(
 
     ocr_engine = load_ocr_engine() if options.use_ocr else None
     ocr_cache = OcrCache()
+    stage_root = Path(tempfile.mkdtemp(prefix=".docmd-stage-", dir=out))
+    results: dict[Path, tuple[Path, int]] = {}
 
-    if options.jobs == 1:
-        for document in documents:
-            output = document_output_path(out, source, document)
-            status = convert_one(
-                document, output, options, ocr_engine=ocr_engine, ocr_cache=ocr_cache
-            )
-            if status != 0:
-                return status
-        return 0
+    def staged_path(document: Path) -> Path:
+        relative = document.relative_to(source)
+        return stage_root / relative.parent / f"{relative.stem}.md"
 
-    def run_worker(doc: Path, output_path: Path) -> tuple[Path, int]:
-        status = convert_one(
-            doc, output_path, options, ocr_engine=ocr_engine, ocr_cache=ocr_cache
-        )
-        return (output_path, status)
+    try:
+        if options.jobs == 1:
+            for document in documents:
+                output = staged_path(document)
+                status = convert_one(
+                    document,
+                    output,
+                    options,
+                    ocr_engine=ocr_engine,
+                    ocr_cache=ocr_cache,
+                    announce=False,
+                )
+                results[document] = (output, status)
+        else:
+            def run_worker(doc: Path, output_path: Path) -> tuple[Path, int]:
+                status = convert_one(
+                    doc,
+                    output_path,
+                    options,
+                    ocr_engine=ocr_engine,
+                    ocr_cache=ocr_cache,
+                    announce=False,
+                )
+                return (output_path, status)
 
-    with ThreadPoolExecutor(max_workers=options.jobs) as pool:
-        futures = {}
-        for document in documents:
-            output = document_output_path(out, source, document)
-            futures[pool.submit(run_worker, document, output)] = output
+            with ThreadPoolExecutor(max_workers=options.jobs) as pool:
+                futures = {
+                    pool.submit(run_worker, document, staged_path(document)): document
+                    for document in documents
+                }
+                for future in as_completed(futures):
+                    document = futures[future]
+                    output_path, status = future.result()
+                    results[document] = (output_path, status)
 
         first_error: int | None = None
-        for future in as_completed(futures):
-            output_path, status = future.result()
-            if status != 0 and first_error is None:
+        for document in documents:
+            staged, status = results[document]
+            if staged.is_file():
+                final = document_output_path(out, source, document)
+                commit_staged_output(staged, final)
+                if not options.quiet:
+                    print(f"docmd: wrote {final}", file=sys.stderr)
+            if status != 0:
                 first_error = status
-                for pending in futures:
-                    pending.cancel()
-
-        if first_error is not None:
-            return first_error
-    return 0
+                break
+        return first_error or 0
+    finally:
+        shutil.rmtree(stage_root, ignore_errors=True)
 
 
 def main() -> int:
+    global _QUIET
     args = build_parser().parse_args()
+    _QUIET = args.quiet
     if not args.input_path or not args.input_path.strip():
         print("docmd: error: input path cannot be empty", file=sys.stderr)
         return 1
     if args.jobs < 1:
         print("docmd: error: --jobs must be at least 1", file=sys.stderr)
         return 1
-    options = ConversionOptions.from_args(args)
+    if args.password:
+        log_warning(
+            "--password exposes the secret in the process list; "
+            "prefer DOCMD_PASSWORD"
+        )
+    try:
+        if not args.no_ocr:
+            OcrConfig.from_env()
+        options = ConversionOptions.from_args(args)
+    except ValueError as exc:
+        print(f"docmd: error: {exc}", file=sys.stderr)
+        return 1
     source = Path(args.input_path)
     if not source.exists():
         print(f"docmd: error: input not found: {source}", file=sys.stderr)
@@ -1625,6 +2829,16 @@ def main() -> int:
             print(f"docmd: error: cannot create output directory: {exc}", file=sys.stderr)
             return 1
         output = out
+
+    try:
+        if output.resolve() == source.resolve():
+            print(
+                f"docmd: error: output path is the input path: {output}",
+                file=sys.stderr,
+            )
+            return 1
+    except OSError:
+        pass
 
     try:
         write_markdown(markdown or "", output)

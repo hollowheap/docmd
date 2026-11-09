@@ -103,16 +103,19 @@ def build() -> None:
             )
             pep723_toml = tomllib.loads(block)
             docmd_deps = set(pep723_toml.get("dependencies", []))
-        except Exception:
-            pep723_toml = {}
-            docmd_deps = set()
+        except Exception as exc:
+            raise SystemExit(f"{SOURCE.name} has invalid PEP 723 metadata: {exc}") from exc
 
-        if py_deps and docmd_deps and py_deps != docmd_deps:
+        if not py_deps:
+            raise SystemExit("pyproject.toml has no project dependencies")
+        if not docmd_deps:
+            raise SystemExit(f"{SOURCE.name} has no PEP 723 dependencies")
+        if py_deps != docmd_deps:
             diff = py_deps.symmetric_difference(docmd_deps)
             raise SystemExit(
                 f"Dependency mismatch between pyproject.toml and {SOURCE.name}: {diff}"
             )
-        if docmd_deps and "opencv-python-headless" not in "".join(docmd_deps):
+        if "opencv-python-headless" not in "".join(docmd_deps):
             raise SystemExit(f"{SOURCE.name} must require opencv-python-headless")
 
         ver_match = re.search(r'^VERSION\s*=\s*["\']([^"\']+)["\']', source, re.MULTILINE)
@@ -145,21 +148,19 @@ def smoke() -> None:
         with tempfile.TemporaryDirectory(prefix=f"docmd-{fixture.stem}-") as tmp:
             output = Path(tmp) / f"{fixture.stem}-{fixture.suffix.lstrip('.')}.md"
             assets = output.parent / f"{output.stem}.assets"
-            result = subprocess.run(
-                [
-                    "uv",
-                    "run",
-                    "--script",
-                    str(PACKAGED),
-                    str(fixture),
-                    "-o",
-                    str(output),
-                    "--no-ocr",
-                    "--verify",
-                ],
-                capture_output=True,
-                text=True,
-            )
+            command = [
+                "uv",
+                "run",
+                "--script",
+                str(PACKAGED),
+                str(fixture),
+                "-o",
+                str(output),
+                "--verify",
+            ]
+            if name != "sample.pdf":
+                command.append("--no-ocr")
+            result = subprocess.run(command, capture_output=True, text=True)
             if result.returncode != 0:
                 raise SystemExit(f"Conversion failed for {name}:\n{result.stderr}")
             if not output.is_file() or not output.read_text(encoding="utf-8").strip():

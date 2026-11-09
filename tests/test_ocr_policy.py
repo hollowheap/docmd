@@ -49,7 +49,7 @@ def test_page_fallback(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "SCANNED HEADING" in result.stdout
     assert "Scanned body text" in result.stdout
-    assert "# SCANNED HEADING" in result.stdout
+    assert "# SCANNED HEADING" not in result.stdout
 
     no_ocr = run_docmd(str(source), "--stdout", "--no-ocr")
     assert no_ocr.returncode == 0, no_ocr.stderr

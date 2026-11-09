@@ -21,7 +21,7 @@ def run_docmd(*args: str) -> subprocess.CompletedProcess[str]:
 
 def assert_normalized(markdown: str) -> None:
     expected = [
-        "| Merged | Merged | Header 3 |",
+        "| Merged |  | Header 3 |",
         "| --- | --- | --- |",
         "| Line 1<br>Line 2 | A\\|B | C |",
     ]
