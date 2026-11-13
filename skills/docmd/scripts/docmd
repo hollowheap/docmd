@@ -2757,14 +2757,27 @@ def convert_directory(
         first_error: int | None = None
         for document in documents:
             staged, status = results[document]
-            if staged.is_file():
-                final = document_output_path(out, source, document)
-                commit_staged_output(staged, final)
-                if not options.quiet:
-                    print(f"docmd: wrote {final}", file=sys.stderr)
             if status != 0:
                 first_error = status
                 break
+            final = document_output_path(out, source, document)
+            try:
+                commit_staged_output(staged, final)
+            except OSError as exc:
+                print(f"docmd: error: cannot write {final}: {exc}", file=sys.stderr)
+                first_error = 1
+                break
+            if not options.quiet:
+                print(f"docmd: wrote {final}", file=sys.stderr)
+        if first_error is not None:
+            for stale in documents[documents.index(document) :]:
+                final = document_output_path(out, source, stale)
+                try:
+                    if final.is_file():
+                        final.unlink()
+                    _clear_generated_assets(final.parent / f"{final.stem}.assets")
+                except OSError as exc:
+                    log_warning(f"cannot remove stale output {final}: {exc}")
         return first_error or 0
     finally:
         shutil.rmtree(stage_root, ignore_errors=True)

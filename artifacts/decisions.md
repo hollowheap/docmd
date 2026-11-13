@@ -133,3 +133,8 @@
   - Context: Untrusted documents could exhaust memory, and a PDF with no text or images exited successfully with empty Markdown.
   - Alternatives: No limits (rejected for agent-facing conversion); a new exit code for empty output (rejected to preserve the four-value contract).
   - Consequences: Byte, page, and image-pixel budgets exit `1` and name the budget; empty content exits `2` as a corrupt document.
+
+- [x] D25 [R05]: A failed batch removes stale outputs of the first failing document and every later document
+  - Context: Review V06 found that a failed rerun left outputs from earlier runs for documents that this run did not publish (Q03).
+  - Alternatives: Leave earlier outputs in place (rejected; the output directory then mixes runs).
+  - Consequences: The walk deletes `<stem>.md` and the generated `image-NNN.*` files of those documents. Other files in `<stem>.assets/` stay. A removal error logs a warning and keeps the exit code.

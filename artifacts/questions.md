@@ -13,3 +13,10 @@
   - Scope: OCR engine
   - Blocks: D05
   - Resolution: D05
+
+### Review V06 — batch publication (robust)
+
+- [x] Q03: Should a failed batch remove outputs that earlier runs wrote for the failing document and later documents?
+  - Scope: directory conversion, `-o` output root
+  - Blocks: D25
+  - Resolution: D25

@@ -261,4 +261,76 @@ def test_verify_directory(tmp_path: Path) -> None:
 
     assert broken_result.returncode == 1
     assert "unbalanced code fence" in broken_result.stderr
-    assert (broken_out / "a.md").is_file()
+    assert not (broken_out / "a.md").exists()
+    assert not (broken_out / "b.md").exists()
+
+
+def test_commit_failure_reports_clean_error(tmp_path: Path) -> None:
+    source = tmp_path / "input"
+    source.mkdir()
+    for name in ("a", "b"):
+        document = Document()
+        document.add_paragraph(f"Doc {name}")
+        document.save(source / f"{name}.docx")
+    out = tmp_path / "out"
+    (out / "a.md").mkdir(parents=True)
+
+    result = run_docmd(str(source), "-o", str(out), "--no-ocr")
+
+    assert result.returncode == 1
+    assert "cannot write" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not (out / "b.md").exists()
+    assert [p.name for p in out.iterdir()] == ["a.md"]
+
+
+def test_failed_rerun_removes_stale_outputs(tmp_path: Path) -> None:
+    source = tmp_path / "input"
+    source.mkdir()
+    for name in ("a", "b", "c"):
+        document = Document()
+        document.add_paragraph(f"Doc {name}")
+        document.add_picture(BytesIO(PNG))
+        document.save(source / f"{name}.docx")
+    out = tmp_path / "out"
+    first = run_docmd(str(source), "-o", str(out), "--no-ocr")
+    assert first.returncode == 0, first.stderr
+    (out / "b.assets" / "notes.txt").write_text("keep")
+
+    (source / "b.docx").write_bytes(b"not a valid document")
+    second = run_docmd(str(source), "-o", str(out), "--no-ocr")
+
+    assert second.returncode == 2
+    assert (out / "a.md").is_file()
+    assert (out / "a.assets").is_dir()
+    assert not (out / "b.md").exists()
+    assert not (out / "c.md").exists()
+    assert not (out / "c.assets").exists()
+    assert [p.name for p in (out / "b.assets").iterdir()] == ["notes.txt"]
+
+
+def test_verify_failure_publishes_only_earlier_documents(tmp_path: Path) -> None:
+    source = tmp_path / "input"
+    source.mkdir()
+    for name, fenced in (("a", False), ("b", True), ("c", False)):
+        document = Document()
+        document.add_paragraph(f"Doc {name}")
+        if fenced:
+            document.add_paragraph("```")
+        document.add_picture(BytesIO(PNG))
+        document.save(source / f"{name}.docx")
+
+    snapshots = []
+    for jobs in ("1", "2", "1", "2"):
+        out = tmp_path / f"out{len(snapshots)}"
+        result = run_docmd(
+            str(source), "-o", str(out), "--verify", "--no-ocr", "--jobs", jobs
+        )
+        assert result.returncode == 1, result.stderr
+        assert (out / "a.md").is_file()
+        assert (out / "a.assets").is_dir()
+        for name in ("b", "c"):
+            assert not (out / f"{name}.md").exists()
+            assert not (out / f"{name}.assets").exists()
+        snapshots.append(sorted(p.relative_to(out).as_posix() for p in out.rglob("*")))
+    assert all(snapshot == snapshots[0] for snapshot in snapshots)
