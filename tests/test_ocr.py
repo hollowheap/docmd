@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
@@ -69,3 +72,45 @@ def test_order_lines_by_layout() -> None:
         "Col 2 Line 2",
         "Bottom Footer",
     ]
+
+
+def test_ort_telemetry_disabled_before_onnxruntime_import() -> None:
+    env = os.environ.copy()
+    env.pop("ORT_DISABLE_TELEMETRY", None)
+    probe = (
+        "import os, sys; "
+        "from importlib.machinery import SourceFileLoader; "
+        "from importlib.util import module_from_spec, spec_from_file_location; "
+        f"spec = spec_from_file_location('docmd_cli', {str(SCRIPT)!r}, "
+        f"loader=SourceFileLoader('docmd_cli', {str(SCRIPT)!r})); "
+        "mod = module_from_spec(spec); "
+        "spec.loader.exec_module(mod); "
+        "assert os.environ.get('ORT_DISABLE_TELEMETRY') == '1'; "
+        "assert 'onnxruntime' not in sys.modules"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    env["ORT_DISABLE_TELEMETRY"] = "0"
+    preserve_probe = (
+        "import os; "
+        "from importlib.machinery import SourceFileLoader; "
+        "from importlib.util import module_from_spec, spec_from_file_location; "
+        f"spec = spec_from_file_location('docmd_cli', {str(SCRIPT)!r}, "
+        f"loader=SourceFileLoader('docmd_cli', {str(SCRIPT)!r})); "
+        "mod = module_from_spec(spec); "
+        "spec.loader.exec_module(mod); "
+        "assert os.environ.get('ORT_DISABLE_TELEMETRY') == '0'"
+    )
+    preserved = subprocess.run(
+        [sys.executable, "-c", preserve_probe],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert preserved.returncode == 0, preserved.stderr

@@ -36,6 +36,9 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote, unquote
 
+# Opt out of onnxruntime 1.29+ 1DS telemetry before any lazy import latches it.
+os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
+
 VERSION = "0.2.1"
 
 IMAGE_MIME_TYPES = {
